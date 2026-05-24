@@ -13,7 +13,6 @@ import torch
 import torch.distributed.tensor
 import torch.nn as nn
 import torch.nn.functional as F
-import transformer_lens
 from jaxtyping import Float, Int
 from torch.distributed import DeviceMesh
 from torch.distributed.tensor import DTensor
@@ -39,8 +38,6 @@ from llamascopium.utils.logging import get_distributed_logger
 
 logger = get_distributed_logger("lorsa")
 
-FORKED_TL = "lmsaes" in getattr(transformer_lens, "__version__", "")
-
 
 @register_sae_config("lorsa")
 class LorsaConfig(SparseDictionaryConfig):
@@ -57,6 +54,7 @@ class LorsaConfig(SparseDictionaryConfig):
     positional_embedding_type: Literal["rotary", "none"] = "rotary"
     rotary_dim: int
     rotary_base: int = 10000
+    rotary_base_local: int | None = None
     rotary_adjacent_pairs: bool = True
     rotary_scale: int = 1
     use_NTK_by_parts_rope: bool = False
@@ -65,6 +63,8 @@ class LorsaConfig(SparseDictionaryConfig):
     NTK_by_parts_high_freq_factor: float = 1.0
     old_context_len: int = 2048
     n_ctx: int
+    attn_type: Literal["global", "local"] = "global"
+    window_size: int | None = None
 
     # Attention settings
     attn_scale: float | None = None
@@ -100,6 +100,9 @@ class LorsaConfig(SparseDictionaryConfig):
         )
         assert self.hook_point_in != self.hook_point_out, "hook_point_in and hook_point_out must be different"
         assert self.n_ov_heads % self.n_qk_heads == 0, "n_ov_heads must be divisible by n_qk_heads"
+        if self.attn_type == "local":
+            assert self.window_size is not None, "window_size must be provided for local attention"
+            assert self.window_size > 0, "window_size must be positive for local attention"
 
         if self.attn_scale is None:
             self.attn_scale = self.d_qk_head**0.5
@@ -178,13 +181,21 @@ class LowRankSparseAttention(
                 )
 
         # Attention mask
-        mask = torch.tril(
+        causal_mask = torch.tril(
             torch.ones(
                 (self.cfg.n_ctx, self.cfg.n_ctx),
                 device=self.cfg.device,
                 dtype=self.cfg.dtype,
             ).bool(),
         )
+        if self.cfg.attn_type == "global":
+            mask = causal_mask
+        elif self.cfg.attn_type == "local":
+            if self.cfg.window_size is None:
+                raise ValueError("window_size must be provided for local attention")
+            mask = torch.triu(causal_mask, 1 - self.cfg.window_size)
+        else:
+            raise ValueError(f"Invalid attention type: {self.cfg.attn_type}")
         if self.device_mesh is not None:
             mask = DimMap({}).distribute(mask, self.device_mesh)
         self.register_buffer("mask", mask)
@@ -215,10 +226,15 @@ class LowRankSparseAttention(
             # Applies a rotation to each two-element chunk of keys and queries pre dot producting to bake in relative position.
             if self.cfg.rotary_dim is None:  # keep mypy happy
                 raise ValueError("Rotary dim must be provided for rotary positional embeddings")
+            rope_base = (
+                self.cfg.rotary_base_local
+                if self.cfg.attn_type == "local" and self.cfg.rotary_base_local is not None
+                else self.cfg.rotary_base
+            )
             sin, cos = self._calculate_sin_cos_rotary(
                 self.cfg.rotary_dim,
                 self.cfg.n_ctx,
-                base=self.cfg.rotary_base,
+                base=rope_base,
                 dtype=self.cfg.dtype,
                 device=self.cfg.device,
             )
@@ -277,6 +293,27 @@ class LowRankSparseAttention(
         if self.cfg.use_decoder_bias:
             torch.nn.init.zeros_(self.b_D)
 
+    @staticmethod
+    def _expanded_mhsa_qk_norm_weights(
+        mhsa: Attention | GroupedQueryAttention,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if hasattr(mhsa, "ln_q") and hasattr(mhsa, "ln_k"):
+            ln_q_w = cast(torch.Tensor, mhsa.ln_q.w)  # type: ignore[attr-defined]
+            ln_k_w = cast(torch.Tensor, mhsa.ln_k.w)  # type: ignore[attr-defined]
+            if mhsa.cfg.n_key_value_heads is not None and ln_k_w.size(0) != mhsa.W_Q.size(0):
+                ln_k_w = torch.repeat_interleave(ln_k_w, mhsa.cfg.n_heads // mhsa.cfg.n_key_value_heads, dim=0)
+            return ln_q_w, ln_k_w
+
+        if hasattr(mhsa, "q_norm") and hasattr(mhsa, "k_norm"):
+            q_norm_w = cast(torch.Tensor, mhsa.q_norm.w)  # type: ignore[attr-defined]
+            k_norm_w = cast(torch.Tensor, mhsa.k_norm.w)  # type: ignore[attr-defined]
+            return (
+                q_norm_w.unsqueeze(0).repeat(mhsa.W_Q.size(0), 1),
+                k_norm_w.unsqueeze(0).repeat(mhsa.W_Q.size(0), 1),
+            )
+
+        raise AttributeError("MHSA module does not expose supported QK-norm weights")
+
     @torch.no_grad()
     def init_lorsa_with_mhsa(self, mhsa: Attention | GroupedQueryAttention):
         """Initialize Lorsa with Original Multi Head Sparse Attention"""
@@ -306,16 +343,9 @@ class LowRankSparseAttention(
             self.W_Q.copy_(W_Q)
             self.W_K.copy_(W_K)
             if self.cfg.use_post_qk_ln and self.cfg.normalization_type == "RMS":
-                assert FORKED_TL, "Post-QK layer normalization requires the forked TransformerLens (lmsaes)."
-                ln_q_w_local = mhsa.ln_q.w[lorsa_qk_indices // qk_exp_factor]  # type: ignore[attr-defined]
-                if mhsa.cfg.n_key_value_heads is not None:
-                    ln_k_w_local = torch.repeat_interleave(
-                        mhsa.ln_k.w,  # type: ignore[attr-defined]
-                        mhsa.cfg.n_heads // mhsa.cfg.n_key_value_heads,
-                        dim=0,
-                    )[lorsa_qk_indices // qk_exp_factor]
-                else:
-                    ln_k_w_local = mhsa.ln_k.w[lorsa_qk_indices // qk_exp_factor]  # type: ignore[attr-defined]
+                q_norm_w, k_norm_w = self._expanded_mhsa_qk_norm_weights(mhsa)
+                ln_q_w_local = q_norm_w[lorsa_qk_indices // qk_exp_factor]
+                ln_k_w_local = k_norm_w[lorsa_qk_indices // qk_exp_factor]
                 ln_q_w = DTensor.from_local(
                     ln_q_w_local,
                     device_mesh=self.device_mesh,
@@ -336,14 +366,12 @@ class LowRankSparseAttention(
                 torch.repeat_interleave(mhsa.W_K, qk_exp_factor, dim=0).to(self.cfg.dtype) / input_norm_factor
             )
             if self.cfg.use_post_qk_ln and self.cfg.normalization_type == "RMS":
-                assert FORKED_TL, "Post-QK layer normalization requires the forked TransformerLens (lmsaes)."
+                q_norm_w, k_norm_w = self._expanded_mhsa_qk_norm_weights(mhsa)
                 self.ln_q.w = nn.Parameter(
-                    torch.repeat_interleave(mhsa.ln_q.w, qk_exp_factor, dim=0).to(self.cfg.dtype)  # type: ignore[attr-defined]
+                    torch.repeat_interleave(q_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype)
                 )
                 self.ln_k.w = nn.Parameter(
-                    torch.repeat_interleave(mhsa.ln_k.w, self.ln_k.w.size(0) // mhsa.ln_k.w.size(0), dim=0).to(  # type: ignore[attr-defined]
-                        self.cfg.dtype
-                    )
+                    torch.repeat_interleave(k_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype)
                 )
 
     @torch.no_grad()
@@ -440,6 +468,52 @@ class LowRankSparseAttention(
         x = self.prepare_input(batch)[0]
         if isinstance(x, DTensor):
             x = x.to_local()
+
+        total_orig_ov = mhsa.cfg.n_heads * mhsa.cfg.d_head
+        if total_orig_ov != mhsa.cfg.d_model:
+            if self.cfg.n_ov_heads % total_orig_ov != 0:
+                raise ValueError(
+                    "For models with n_heads * d_head != d_model, "
+                    "d_model * expansion_factor must be divisible by n_heads * d_head. "
+                    f"Got d_model * expansion_factor = {self.cfg.n_ov_heads}, "
+                    f"n_heads * d_head = {total_orig_ov}."
+                )
+
+            feature_repeats_per_ov = self.cfg.n_ov_heads // total_orig_ov
+            orig_W_V = mhsa.W_V.permute(0, 2, 1).reshape(total_orig_ov, self.cfg.d_model)
+            orig_W_O = mhsa.W_O.reshape(total_orig_ov, self.cfg.d_model)
+
+            if self.device_mesh is not None:
+                assert isinstance(self.W_O, DTensor)
+                assert isinstance(self.W_V, DTensor)
+                model_parallel_rank = self.device_mesh.get_local_rank(mesh_dim="model")
+                model_parallel_size = mesh_dim_size(self.device_mesh, "model")
+                feature_start = model_parallel_rank * self.cfg.n_ov_heads // model_parallel_size
+                feature_end = (model_parallel_rank + 1) * self.cfg.n_ov_heads // model_parallel_size
+
+                local_feature_indices = torch.arange(feature_start, feature_end, device=orig_W_V.device)
+                orig_ov_indices = torch.div(local_feature_indices, feature_repeats_per_ov, rounding_mode="floor")
+
+                W_V_local = orig_W_V[orig_ov_indices].clone()
+                W_O_local = orig_W_O[orig_ov_indices].clone()
+                W_V_local = W_V_local / W_V_local.norm(dim=1, keepdim=True)
+                W_O_local = W_O_local / W_O_local.norm(dim=1, keepdim=True)
+                torch.distributed.broadcast(tensor=W_O_local, group=self.device_mesh.get_group("data"), group_src=0)
+                torch.distributed.broadcast(tensor=W_V_local, group=self.device_mesh.get_group("data"), group_src=0)
+                W_O_global = DTensor.from_local(
+                    W_O_local, device_mesh=self.device_mesh, placements=self.dim_maps()["W_O"].placements(self.device_mesh)
+                )
+                W_V_global = DTensor.from_local(
+                    W_V_local, device_mesh=self.device_mesh, placements=self.dim_maps()["W_V"].placements(self.device_mesh)
+                )
+                self.W_O.copy_(W_O_global)
+                self.W_V.copy_(W_V_global)
+            else:
+                repeated_W_V = torch.repeat_interleave(orig_W_V, feature_repeats_per_ov, dim=0)
+                repeated_W_O = torch.repeat_interleave(orig_W_O, feature_repeats_per_ov, dim=0)
+                self.W_V.copy_(repeated_W_V / repeated_W_V.norm(dim=1, keepdim=True))
+                self.W_O.copy_(repeated_W_O / repeated_W_O.norm(dim=1, keepdim=True))
+            return
 
         v_per_head = (
             x.reshape(-1, self.cfg.d_model) @ mhsa.W_V.permute(1, 0, 2).reshape(mhsa.cfg.d_model, mhsa.cfg.d_model)
@@ -644,21 +718,7 @@ class LowRankSparseAttention(
     ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
         """Compute the hidden pre-activations."""
         q, k, v = self._compute_qkv(x)
-        query = q.permute(0, 2, 1, 3)
-        key = k.permute(0, 2, 1, 3)
-        value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
-        with sdpa_kernel(
-            backends=[
-                SDPBackend.FLASH_ATTENTION,
-                SDPBackend.CUDNN_ATTENTION,
-                SDPBackend.EFFICIENT_ATTENTION,
-                SDPBackend.MATH,
-            ]
-        ):
-            z = F.scaled_dot_product_attention(
-                query, key, value, scale=1 / self.attn_scale, is_causal=True, enable_gqa=True
-            )
-        return z.permute(0, 2, 1, 3).reshape(*v.shape)
+        return self._compute_hidden_pre_with_sdpa_or_manual(q, k, v)
 
     @overload
     def encode(
@@ -708,21 +768,7 @@ class LowRankSparseAttention(
         scores: Optional[torch.Tensor] = None
 
         if not (return_attention_pattern or return_attention_score or hook_attn_scores):
-            query = q.permute(0, 2, 1, 3)
-            key = k.permute(0, 2, 1, 3)
-            value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
-            with sdpa_kernel(
-                backends=[
-                    SDPBackend.FLASH_ATTENTION,
-                    SDPBackend.CUDNN_ATTENTION,
-                    SDPBackend.EFFICIENT_ATTENTION,
-                    SDPBackend.MATH,
-                ]
-            ):
-                z = F.scaled_dot_product_attention(
-                    query, key, value, scale=1 / self.attn_scale, is_causal=True, enable_gqa=True
-                )
-            hidden_pre = z.permute(0, 2, 1, 3).reshape(*v.shape)
+            hidden_pre = self._compute_hidden_pre_with_sdpa_or_manual(q, k, v)
         else:
             # Attention pattern
             # n_qk_heads batch q_pos k_pos
@@ -883,6 +929,117 @@ class LowRankSparseAttention(
         x_rotated = x_rot * rotary_cos + x_flip * rotary_sin
 
         return torch.cat([x_rotated, x_pass], dim=-1)
+
+    def _sdpa_attention_kwargs(
+        self,
+        query: Float[torch.Tensor, "batch n_qk_heads q_pos d_qk_head"],
+        key: Float[torch.Tensor, "batch n_qk_heads k_pos d_qk_head"],
+    ) -> dict[str, Any]:
+        if self.cfg.attn_type == "global":
+            return {"attn_mask": None, "is_causal": True}
+
+        mask = self.mask[None, None, -query.size(-2) :, -key.size(-2) :]  # type: ignore[index]
+        if not isinstance(mask, DTensor):
+            mask = mask.to(query.device)
+        return {"attn_mask": mask, "is_causal": False}
+
+    def _should_use_manual_attention(
+        self,
+        query: Float[torch.Tensor, "batch n_qk_heads q_pos d_qk_head"],
+    ) -> bool:
+        return (
+            self.cfg.attn_type == "local"
+            and self.cfg.d_qk_head != self.cfg.ov_group_size
+            and isinstance(query, DTensor)
+        )
+
+    def _compute_hidden_pre_with_sdpa_or_manual(
+        self,
+        q: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
+        k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
+        v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
+    ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
+        query = q.permute(0, 2, 1, 3)
+        key = k.permute(0, 2, 1, 3)
+        if self._should_use_manual_attention(query):
+            q_local = q.to_local() if isinstance(q, DTensor) else q
+            k_local = k.to_local() if isinstance(k, DTensor) else k
+            v_local = v.to_local() if isinstance(v, DTensor) else v
+            hidden_pre_local = self._compute_local_sliding_window_hidden_pre_local(q_local, k_local, v_local)
+            if self.device_mesh is not None:
+                return DimMap({"data": 0, "model": 2}).from_local(hidden_pre_local, self.device_mesh)
+            return hidden_pre_local
+
+        value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
+        with sdpa_kernel(
+            backends=[
+                SDPBackend.FLASH_ATTENTION,
+                SDPBackend.CUDNN_ATTENTION,
+                SDPBackend.EFFICIENT_ATTENTION,
+                SDPBackend.MATH,
+            ]
+        ):
+            z = F.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                scale=1 / self.attn_scale,
+                enable_gqa=True,
+                **self._sdpa_attention_kwargs(query=query, key=key),
+            )
+        return z.permute(0, 2, 1, 3).reshape(*v.shape)
+
+    def _compute_local_sliding_window_hidden_pre_local(
+        self,
+        q: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
+        k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
+        v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
+    ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
+        """Compute local-attention hidden_pre on a single TP shard without SDPA.
+
+        This path is only used for the problematic combination of:
+        local attention + DTensor tensor parallelism + d_qk_head != ov_group_size.
+        It keeps the existing TP partitioning by operating directly on the local shard,
+        and only materializes per-chunk sliding-window scores instead of a full seq x seq matrix.
+        """
+        assert self.cfg.window_size is not None, "window_size must be provided for local attention"
+        batch_size, seq_len, n_qk_heads_local, _ = q.shape
+        ov_group_size = self.cfg.ov_group_size
+        if v.size(-1) != n_qk_heads_local * ov_group_size:
+            raise ValueError(
+                "Local tensor-parallel shard has incompatible V width for sliding-window attention. "
+                f"Expected {n_qk_heads_local * ov_group_size}, got {v.size(-1)}."
+            )
+
+        value = v.reshape(batch_size, seq_len, n_qk_heads_local, ov_group_size)
+        hidden_pre = torch.empty_like(v)
+        chunk_size = min(self.cfg.window_size, 128)
+        scale = 1 / self.attn_scale
+        positions = torch.arange(seq_len, device=q.device)
+
+        for q_start in range(0, seq_len, chunk_size):
+            q_end = min(q_start + chunk_size, seq_len)
+            k_start = max(0, q_start - self.cfg.window_size + 1)
+            k_end = q_end
+
+            q_chunk = q[:, q_start:q_end].permute(0, 2, 1, 3)  # (b, h, q, d)
+            k_chunk = k[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, d)
+            v_chunk = value[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, r)
+
+            scores = torch.einsum("bhqd,bhkd->bhqk", q_chunk, k_chunk).to(torch.float32) * scale
+
+            q_positions = positions[q_start:q_end]
+            k_positions = positions[k_start:k_end]
+            valid = (k_positions[None, :] <= q_positions[:, None]) & (
+                k_positions[None, :] >= (q_positions[:, None] - self.cfg.window_size + 1)
+            )
+            scores = scores.masked_fill(~valid[None, None, :, :], float("-inf"))
+
+            probs = F.softmax(scores, dim=-1).to(v_chunk.dtype)
+            z_chunk = torch.einsum("bhqk,bhkr->bhqr", probs, v_chunk)
+            hidden_pre[:, q_start:q_end] = z_chunk.permute(0, 2, 1, 3).reshape(batch_size, q_end - q_start, -1)
+
+        return hidden_pre
 
     def _rotate_every_two(self, x: Float[torch.Tensor, "... rotary_dim"]) -> Float[torch.Tensor, "... rotary_dim"]:
         """
