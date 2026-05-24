@@ -1109,6 +1109,7 @@ class Evo2LanguageModel(LanguageModel):
 
         activations["tokens"] = tokens
         activations["mask"] = tokens != (self.pad_token_id or 0)
+        activations["attention_mask"] = activations["mask"]
         return activations
 
     def trace(self, raw: dict[str, Any], n_context: Optional[int] = None) -> list[list[Any]]:

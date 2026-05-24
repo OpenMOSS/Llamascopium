@@ -9,5 +9,7 @@ mkdir -p "$LOGDIR"
 CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --master_port=29440 \
   exp/analyze_evo2_tc.py \
     --layer 26 \
-    --n-tokens 1_000_000 \
+    --k 64 \
+    --exp_factor 8 \
+    --n_tokens 1_000_000 \
   > "$LOGDIR/evo2_tc_l26_analyze.log" 2>&1

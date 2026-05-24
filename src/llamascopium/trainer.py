@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 from typing import Annotated, Any, Callable, Iterable, Literal, Tuple
 
@@ -163,7 +164,8 @@ class Trainer:
         """
 
         # Create checkpoint directory if it doesn't exist
-        checkpoint_dir = Path(checkpoint_path) / "checkpoints" / f"step_{self.cur_step}"
+        checkpoint_root = Path(checkpoint_path)
+        checkpoint_dir = checkpoint_root / "checkpoints" / f"step_{self.cur_step}"
 
         if checkpoint_dir and not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir, exist_ok=True)
@@ -221,7 +223,28 @@ class Trainer:
                 fs_writer = FileSystemWriter(scheduler_path)
                 dcp.save(scheduler_state, storage_writer=fs_writer)
 
+        if is_primary_rank(sae.device_mesh):
+            self._sync_latest_weights(checkpoint_dir=checkpoint_dir, checkpoint_root=checkpoint_root)
+
         logger.info(f"Checkpoint saved to {checkpoint_path}")
+
+    def _sync_latest_weights(self, checkpoint_dir: Path, checkpoint_root: Path) -> None:
+        for suffix in (".safetensors", ".pt", ".dcp"):
+            latest_path = checkpoint_root / f"sae_weights{suffix}"
+            step_path = checkpoint_dir / f"sae_weights{suffix}"
+            if not step_path.exists():
+                continue
+
+            if latest_path.is_dir():
+                shutil.rmtree(latest_path)
+            elif latest_path.exists():
+                latest_path.unlink()
+
+            if step_path.is_dir():
+                shutil.copytree(step_path, latest_path)
+            else:
+                shutil.copy2(step_path, latest_path)
+            break
 
     @classmethod
     def from_checkpoint(
