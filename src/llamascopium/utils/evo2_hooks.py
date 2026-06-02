@@ -4,15 +4,25 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from evo2.utils import CONFIG_MAP
+from evo2.utils import CONFIG_MAP, HF_MODEL_NAME_MAP
 
 Evo2HookKind = Literal["lorsa", "sconv"]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+HF_TO_INTERNAL_MODEL_NAME = {hf_name: internal_name for internal_name, hf_name in HF_MODEL_NAME_MAP.items()}
+
+
+def normalize_evo2_model_name(model_name: str) -> str:
+    if model_name in CONFIG_MAP:
+        return model_name
+    if model_name in HF_TO_INTERNAL_MODEL_NAME:
+        return HF_TO_INTERNAL_MODEL_NAME[model_name]
+    raise KeyError(model_name)
+
 
 def load_evo2_config(model_name: str = "evo2_7b") -> dict:
-    config_relpath = CONFIG_MAP[model_name]
+    config_relpath = CONFIG_MAP[normalize_evo2_model_name(model_name)]
     config_path = REPO_ROOT / "third_party" / "evo2" / "evo2" / config_relpath
     with config_path.open("r") as f:
         return yaml.safe_load(f)

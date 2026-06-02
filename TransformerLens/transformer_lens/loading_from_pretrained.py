@@ -2306,6 +2306,7 @@ def get_pretrained_state_dict(
         if local_path is not None:
             checkpoint = local_path
         elif DEFAULT_EVO2_7B_PATH.exists():
+            print(f'{DEFAULT_EVO2_7B_PATH = }')
             checkpoint = DEFAULT_EVO2_7B_PATH
         elif Path(official_model_name).exists():
             checkpoint = official_model_name

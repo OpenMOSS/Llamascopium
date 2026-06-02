@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -34,8 +35,10 @@ from transformers import (
     BatchFeature,
     Qwen2_5_VLForConditionalGeneration,
 )
+from evo2.utils import HF_MODEL_NAME_MAP
 
 from llamascopium.backend.evo2 import load_evo2
+from llamascopium.backend.evo2 import resolve_evo2_checkpoint
 from llamascopium.backend.tl_addons import run_with_cache_until, run_with_ref_cache
 from llamascopium.config import BaseModelConfig
 from llamascopium.utils.auto import PretrainedSAEType, auto_infer_pretrained_sae_type
@@ -83,6 +86,24 @@ def set_tokens(tokenizer, bos_token_id, eos_token_id, pad_token_id):
         else:
             tokenizer.bos_token = tokenizer.decode(bos_token_id)
     return tokenizer
+
+
+@contextmanager
+def temporary_env_vars(env_vars: dict[str, str | None]):
+    previous = {key: os.environ.get(key) for key in env_vars}
+    try:
+        for key, value in env_vars.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def _match_str_tokens_to_input(text: str, str_tokens: list[str]) -> list[Optional[dict[str, Any]]]:
@@ -137,6 +158,12 @@ class LanguageModelConfig(BaseModelConfig):
     """ Whether to only load the model from the local files. Should have the same effect as `HF_HUB_OFFLINE=1`. """
     max_length: int = 2048
     """ The maximum length of the input. """
+    activation_device: str | None = None
+    """ Device to move captured activations and returned tensors onto after forward. If `None`, uses the model device. """
+    random_crop_to_max_length: bool = False
+    """ Whether to crop raw text to a random window of `max_length` before tokenization when inputs are longer than `max_length`. """
+    random_crop_seed: int = 42
+    """ Base seed used for deterministic random cropping of long raw text inputs. """
     backend: Literal["huggingface", "transformer_lens", "tokenizer_only", "evo2", "auto"] = "auto"
     """ The backend to use for the language model. ``"tokenizer_only"`` loads only the tokenizer without model weights. """
     prepend_bos: bool = True
@@ -305,6 +332,43 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         self.move_model_modules_to_device()
 
         self.tokenizer = set_tokens(hf_tokenizer, cfg.bos_token_id, cfg.eos_token_id, cfg.pad_token_id)
+        self.activation_device = self.device if cfg.activation_device is None else torch.device(cfg.activation_device)
+
+    @classmethod
+    def from_pretrained_evo2(cls, cfg: LanguageModelConfig, device_mesh: DeviceMesh | None = None):
+        model_name_or_path = cfg.model_from_pretrained_path or HF_MODEL_NAME_MAP.get(cfg.model_name, cfg.model_name)
+        local_path = cfg.model_from_pretrained_path or resolve_evo2_checkpoint(cfg.model_name)
+        offline_env = (
+            {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"} if local_path is not None else {}
+        )
+        with temporary_env_vars(offline_env):
+            hooked = HookedTransformer.from_pretrained_no_processing(
+                model_name_or_path,
+                device=cfg.device,
+                dtype=cfg.dtype,
+                move_to_device=True,
+                default_prepend_bos=cfg.prepend_bos,
+                n_ctx=cfg.max_length,
+                cache_dir=cfg.cache_dir,
+                local_files_only=cfg.local_files_only or local_path is not None,
+                local_path=local_path,
+                trust_remote_code=True,
+            )
+        return cls.from_hooked_transformer(
+            hooked,
+            device_mesh=device_mesh,
+            model_name=cfg.model_name,
+            model_from_pretrained_path=cfg.model_from_pretrained_path,
+            cache_dir=cfg.cache_dir,
+            local_files_only=cfg.local_files_only,
+            max_length=cfg.max_length,
+            prepend_bos=cfg.prepend_bos,
+            dtype=cfg.dtype,
+            activation_device=cfg.activation_device,
+            random_crop_to_max_length=cfg.random_crop_to_max_length,
+            random_crop_seed=cfg.random_crop_seed,
+            backend=cfg.backend,
+        )
 
     @classmethod
     def from_hooked_transformer(
@@ -336,7 +400,34 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         model.lm_cfg = LanguageModelConfig(**(inferred | overrides))
         model.device_mesh = device_mesh
         model.device = next(model.parameters()).device
+        model.activation_device = (
+            model.device
+            if model.lm_cfg.activation_device is None
+            else torch.device(model.lm_cfg.activation_device)
+        )
         return model
+
+    def _crop_text_to_random_window(self, text: str, meta: dict[str, Any] | None = None) -> str:
+        if not self.lm_cfg.random_crop_to_max_length or len(text) <= self.lm_cfg.max_length:
+            return text
+
+        meta = meta or {}
+        seed_material = ":".join(
+            [
+                str(self.lm_cfg.random_crop_seed),
+                str(meta.get("shard_idx", 0)),
+                str(meta.get("context_idx", 0)),
+                str(len(text)),
+            ]
+        ).encode("utf-8")
+        crop_seed = int.from_bytes(hashlib.blake2b(seed_material, digest_size=8).digest(), byteorder="big")
+        max_start = len(text) - self.lm_cfg.max_length
+        start = crop_seed % (max_start + 1)
+        end = start + self.lm_cfg.max_length
+        return text[start:end]
+
+    def _move_activation_to_capture_device(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.detach().to(self.activation_device)
 
     def trace(self, raw: dict[str, Any], n_context: Optional[int] = None) -> list[list[Any]]:
         if any(key in ["images", "videos"] for key in raw):
@@ -394,19 +485,36 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         tokens = tokens.contiguous()
 
         _, activations = self.run_with_cache_until(tokens, names_filter=hook_points, until=hook_points[-1])
+        activations = {hook_point: self._move_activation_to_capture_device(activations[hook_point]) for hook_point in hook_points}
 
         assert self.pad_token_id is not None and self.bos_token_id is not None, "Pad and BOS token IDs must be set"
+        tokens = tokens.to(self.activation_device)
         mask = torch.logical_and(tokens.ne(self.pad_token_id), tokens.ne(self.bos_token_id)).int()
         attention_mask = torch.logical_and(tokens.ne(self.pad_token_id), tokens.ne(self.bos_token_id)).int()
 
-        return {hook_point: activations[hook_point] for hook_point in hook_points} | {
+        return activations | {
             "tokens": tokens,
             "mask": mask,
             "attention_mask": attention_mask,
         }
 
     def preprocess_raw_data(self, raw: dict[str, Any]) -> dict[str, Any]:
-        return raw
+        texts = raw.get("text")
+        if texts is None or not self.lm_cfg.random_crop_to_max_length:
+            return raw
+
+        if isinstance(texts, str):
+            texts = [texts]
+
+        meta = raw.get("meta", [{} for _ in range(len(texts))])
+        if isinstance(meta, dict):
+            meta = [meta]
+
+        cropped_texts = [self._crop_text_to_random_window(text, meta[i]) for i, text in enumerate(texts)]
+        return {
+            **raw,
+            "text": cropped_texts,
+        }
 
     @property
     def eos_token_id(self) -> int | None:
@@ -922,14 +1030,50 @@ class Evo2LanguageModel(LanguageModel):
             model_name=cfg.model_name,
             local_path=cfg.model_from_pretrained_path,
             target_device=self.device,
+            dtype=cfg.dtype,
         )
         self.model = self.evo2.model
         self.model.eval()
         self.tokenizer = self.evo2.tokenizer
         self.primary_device = self.device
+        self.activation_device = self.device if cfg.activation_device is None else torch.device(cfg.activation_device)
+
+    def _crop_text_to_random_window(self, text: str, meta: dict[str, Any] | None = None) -> str:
+        if not self.cfg.random_crop_to_max_length or len(text) <= self.cfg.max_length:
+            return text
+
+        meta = meta or {}
+        seed_material = ":".join(
+            [
+                str(self.cfg.random_crop_seed),
+                str(meta.get("shard_idx", 0)),
+                str(meta.get("context_idx", 0)),
+                str(len(text)),
+            ]
+        ).encode("utf-8")
+        crop_seed = int.from_bytes(hashlib.blake2b(seed_material, digest_size=8).digest(), byteorder="big")
+        max_start = len(text) - self.cfg.max_length
+        start = crop_seed % (max_start + 1)
+        end = start + self.cfg.max_length
+        return text[start:end]
 
     def preprocess_raw_data(self, raw: dict[str, Any]) -> dict[str, Any]:
-        return raw
+        texts = raw.get("text")
+        if texts is None or not self.cfg.random_crop_to_max_length:
+            return raw
+
+        if isinstance(texts, str):
+            texts = [texts]
+
+        meta = raw.get("meta", [{} for _ in range(len(texts))])
+        if isinstance(meta, dict):
+            meta = [meta]
+
+        cropped_texts = [self._crop_text_to_random_window(text, meta[i]) for i, text in enumerate(texts)]
+        return {
+            **raw,
+            "text": cropped_texts,
+        }
 
     @property
     def eos_token_id(self) -> int | None:
@@ -1006,6 +1150,9 @@ class Evo2LanguageModel(LanguageModel):
             raise TypeError(f"Expected tensor activation, got {type(tensor_or_tuple).__name__}")
         return tensor_or_tuple
 
+    def _move_activation_to_capture_device(self, tensor: torch.Tensor) -> torch.Tensor:
+        return tensor.detach().to(self.activation_device)
+
     def to_activations(
         self, raw: dict[str, Any], hook_points: list[str], n_context: Optional[int] = None
     ) -> dict[str, torch.Tensor]:
@@ -1028,7 +1175,7 @@ class Evo2LanguageModel(LanguageModel):
                 def _capture_fir_output(output: Any, *, hook_name: str = hook_point) -> None:
                     if layer_idx in fir_capture_seen:
                         return
-                    activation = self._unwrap_activation(output).detach().to(self.primary_device)
+                    activation = self._move_activation_to_capture_device(self._unwrap_activation(output))
                     activations[hook_name] = activation
                     fir_capture_seen.add(layer_idx)
 
@@ -1062,7 +1209,7 @@ class Evo2LanguageModel(LanguageModel):
                     *,
                     hook_name: str = hook_point,
                 ) -> None:
-                    activation = self._unwrap_activation(output).detach().to(self.primary_device)
+                    activation = self._move_activation_to_capture_device(self._unwrap_activation(output))
                     activations[hook_name] = activation
 
                 handles.append(module.register_forward_hook(_capture_block_output))
@@ -1075,7 +1222,7 @@ class Evo2LanguageModel(LanguageModel):
                     *,
                     hook_name: str = hook_point,
                 ) -> None:
-                    activation = self._unwrap_activation(inputs[0]).detach().to(self.primary_device)
+                    activation = self._move_activation_to_capture_device(self._unwrap_activation(inputs[0]))
                     activations[hook_name] = activation
 
                 handles.append(module.register_forward_pre_hook(_capture_input, with_kwargs=False))
@@ -1087,7 +1234,7 @@ class Evo2LanguageModel(LanguageModel):
                     *,
                     hook_name: str = hook_point,
                 ) -> None:
-                    activation = self._unwrap_activation(output).detach().to(self.primary_device)
+                    activation = self._move_activation_to_capture_device(self._unwrap_activation(output))
                     activations[hook_name] = activation
 
                 handles.append(module.register_forward_hook(_capture_output))
@@ -1107,9 +1254,10 @@ class Evo2LanguageModel(LanguageModel):
         if missing:
             raise RuntimeError(f"Failed to capture Evo2 activations for hook points: {missing}")
 
-        activations["tokens"] = tokens
-        activations["mask"] = tokens != (self.pad_token_id or 0)
-        activations["attention_mask"] = activations["mask"]
+        returned_tokens = tokens.to(self.activation_device)
+        activations["tokens"] = returned_tokens
+        activations["mask"] = returned_tokens != (self.pad_token_id or 0)
+        activations["attention_mask"] = activations["mask"].clone()
         return activations
 
     def trace(self, raw: dict[str, Any], n_context: Optional[int] = None) -> list[list[Any]]:

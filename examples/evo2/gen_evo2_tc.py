@@ -69,13 +69,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-name", type=str, default="dna")
     parser.add_argument("--output-dir", type=str, default=str(default_activation_dir("tc_1d")))
     parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--backend", type=str, choices=["transformer_lens", "evo2"], default="transformer_lens")
+    parser.add_argument("--activation-device", type=str, choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--total-tokens", type=int, default=1_000_000)
     parser.add_argument("--context-size", type=int, default=64)
+    parser.add_argument("--crop-mode", type=str, choices=["prefix", "random"], default="random")
+    parser.add_argument("--crop-seed", type=int, default=42)
     parser.add_argument("--model-batch-size", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=2048)
     parser.add_argument("--buffer-size", type=int, default=2048)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--dtype", type=str, default="torch.float32")
+    parser.add_argument("--dtype", type=str, default="torch.bfloat16")
     return parser
 
 
@@ -99,9 +103,12 @@ if __name__ == "__main__":
             model_name=args.model_name,
             device=args.device,
             dtype=args.dtype,
-            backend="evo2",
+            backend=args.backend,
             prepend_bos=False,
             max_length=args.context_size,
+            activation_device=args.activation_device,
+            random_crop_to_max_length=args.crop_mode == "random",
+            random_crop_seed=args.crop_seed,
         ),
         model_name=args.model_name,
         dataset=DatasetConfig(
@@ -120,7 +127,7 @@ if __name__ == "__main__":
         buffer_size=args.buffer_size,
         buffer_shuffle=BufferShuffleConfig(
             perm_seed=42,
-            generator_device=args.device,
+            generator_device=args.activation_device,
         ),
         num_workers=args.num_workers,
         device_type="cpu" if args.device == "cpu" else "cuda",

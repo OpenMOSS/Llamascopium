@@ -6,10 +6,12 @@ import sys
 from unittest.mock import patch
 
 import torch
+from evo2.utils import HF_MODEL_NAME_MAP
 
 DEFAULT_EVO2_CHECKPOINTS = {
     "evo2_7b": Path("/inspire/hdd/global_user/hezhengfu-240208120186/models/evo2_7b/evo2_7b.pt"),
 }
+HF_TO_INTERNAL_MODEL_NAME = {hf_name: internal_name for internal_name, hf_name in HF_MODEL_NAME_MAP.items()}
 
 _ROTARY_PATCHED = False
 
@@ -24,6 +26,10 @@ def _get_vendor_evo2_class():
             sys.path.insert(0, str(vendored_root))
         from evo2 import Evo2 as vendor_evo2
     return vendor_evo2
+
+
+def _normalize_vendor_evo2_model_name(model_name: str) -> str:
+    return HF_TO_INTERNAL_MODEL_NAME.get(model_name, model_name)
 
 
 def _patch_rotary_for_cpu() -> None:
@@ -90,6 +96,7 @@ def _patch_rotary_for_cpu() -> None:
 
 
 def resolve_evo2_checkpoint(model_name: str = "evo2_7b", local_path: str | Path | None = None) -> str | None:
+    model_name = _normalize_vendor_evo2_model_name(model_name)
     if local_path is not None:
         return str(Path(local_path).expanduser().resolve())
     default_path = DEFAULT_EVO2_CHECKPOINTS.get(model_name)
@@ -106,6 +113,12 @@ def _resolve_target_device(target_device: str | torch.device | None) -> torch.de
     if target_device == "cuda":
         return torch.device(f"cuda:{torch.cuda.current_device()}") if torch.cuda.is_available() else torch.device("cpu")
     return torch.device(target_device)
+
+
+def _apply_model_dtype(evo2_model: object, dtype: torch.dtype | None) -> object:
+    if dtype is not None:
+        evo2_model.model = evo2_model.model.to(dtype=dtype)
+    return evo2_model
 
 
 @contextmanager
@@ -206,10 +219,12 @@ class Evo2:
         model_name: str = "evo2_7b",
         local_path: str | Path | None = None,
         target_device: str | torch.device | None = None,
+        dtype: torch.dtype | None = None,
         *args,
         **kwargs,
     ):
         vendor_evo2 = _get_vendor_evo2_class()
+        model_name = _normalize_vendor_evo2_model_name(model_name)
         _patch_rotary_for_cpu()
         evo2_kwargs = {
             "model_name": model_name,
@@ -219,14 +234,18 @@ class Evo2:
         resolved_target_device = _resolve_target_device(target_device)
         with _patch_stripedhyena_single_device(resolved_target_device):
             if torch.cuda.is_available():
-                return vendor_evo2(*args, **evo2_kwargs)
-            with patch("torch.cuda.device", new=lambda *_args, **_kwargs: nullcontext()):
-                return vendor_evo2(*args, **evo2_kwargs)
+                evo2 = vendor_evo2(*args, **evo2_kwargs)
+            else:
+                with patch("torch.cuda.device", new=lambda *_args, **_kwargs: nullcontext()):
+                    evo2 = vendor_evo2(*args, **evo2_kwargs)
+
+        return _apply_model_dtype(evo2, dtype)
 
 
 def load_evo2(
     model_name: str = "evo2_7b",
     local_path: str | Path | None = None,
     target_device: str | torch.device | None = None,
+    dtype: torch.dtype | None = None,
 ) -> Evo2:
-    return Evo2(model_name=model_name, local_path=local_path, target_device=target_device)
+    return Evo2(model_name=model_name, local_path=local_path, target_device=target_device, dtype=dtype)

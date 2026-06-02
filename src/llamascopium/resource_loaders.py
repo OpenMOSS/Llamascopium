@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Literal, Optional, cast
 
 import datasets
@@ -63,7 +64,7 @@ def infer_model_backend(model_name: str) -> Literal["huggingface", "transformer_
         return "huggingface"
     elif model_name.startswith("Qwen/Qwen2.5"):
         return "huggingface"
-    elif model_name.startswith("evo2_"):
+    elif model_name.startswith("arcinstitute/evo2_"):
         return "evo2"
     else:
         return "transformer_lens"
@@ -78,9 +79,11 @@ def load_model(cfg: LanguageModelConfig, device_mesh: DeviceMesh | None = None) 
             return QwenVLLanguageModel(cfg)
         else:
             return HuggingFaceLanguageModel(cfg)
+    elif backend == "evo2":
+        return TransformerLensLanguageModel.from_pretrained_evo2(cfg, device_mesh)
     elif backend == "transformer_lens":
         return TransformerLensLanguageModel(cfg, device_mesh)
-    elif backend == "evo2":
-        return Evo2LanguageModel(cfg)
+    # elif backend == "evo2":
+    #     return Evo2LanguageModel(cfg)
     else:
         raise NotImplementedError(f"Backend {backend} not supported.")
