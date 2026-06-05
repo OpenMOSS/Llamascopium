@@ -31,11 +31,12 @@ from einops import repeat
 from torch.distributed.device_mesh import DeviceMesh
 from tqdm import tqdm
 
-from lm_saes.abstract_sae import AbstractSparseAutoEncoder
-from lm_saes.activation.factory import ActivationFactory
-from lm_saes.lorsa import LowRankSparseAttention
-from lm_saes.utils.discrete import KeyedDiscreteMapper
-from lm_saes.utils.logging import get_distributed_logger
+from llamascopium.activation.factory import ActivationFactory
+from llamascopium.models.lorsa import LowRankSparseAttention
+from llamascopium.models.sparse_dictionary import SparseDictionary
+from llamascopium.utils.discrete import KeyedDiscreteMapper
+from llamascopium.utils.distributed import is_primary_rank
+from llamascopium.utils.logging import get_distributed_logger
 
 from .base import PostAnalysisProcessor, register_post_analysis_processor
 
@@ -52,7 +53,7 @@ class LorsaPostAnalysisProcessor(PostAnalysisProcessor):
 
     def _process_tensors(
         self,
-        sae: AbstractSparseAutoEncoder,
+        sae: SparseDictionary,
         act_times: torch.Tensor,
         n_analyzed_tokens: int,
         max_feature_acts: torch.Tensor,

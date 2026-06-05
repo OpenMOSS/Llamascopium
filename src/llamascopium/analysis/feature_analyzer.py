@@ -5,21 +5,47 @@ from typing import Any, Mapping, Optional, cast
 import torch
 import torch.distributed.tensor
 from einops import rearrange, repeat
+from pydantic import ConfigDict, Field
 from torch.distributed.device_mesh import DeviceMesh
 from torch.distributed.tensor import DTensor
 from tqdm import tqdm
 
-from lm_saes.abstract_sae import AbstractSparseAutoEncoder
-from lm_saes.activation.factory import ActivationFactory
-from lm_saes.analysis.post_analysis import get_post_analysis_processor
-from lm_saes.clt import CrossLayerTranscoder
-from lm_saes.config import FeatureAnalyzerConfig
-from lm_saes.crosscoder import CrossCoder
-from lm_saes.lorsa import LowRankSparseAttention
-from lm_saes.utils.discrete import KeyedDiscreteMapper
-from lm_saes.utils.distributed import DimMap, masked_fill, to_local
-from lm_saes.utils.misc import is_primary_rank
-from lm_saes.utils.tensor_dict import concat_dict_of_tensor, sort_dict_of_tensor
+from llamascopium.activation.factory import ActivationFactory
+from llamascopium.config import BaseConfig
+from llamascopium.models.clt import CrossLayerTranscoder
+from llamascopium.models.crosscoder import Crosscoder
+from llamascopium.models.lorsa import LowRankSparseAttention
+from llamascopium.models.sparse_dictionary import SparseDictionary
+from llamascopium.utils.discrete import KeyedDiscreteMapper
+from llamascopium.utils.distributed import DimMap, is_primary_rank, masked_fill, to_local
+from llamascopium.utils.tensor_dict import concat_dict_of_tensor, sort_dict_of_tensor
+
+from .post_analysis import get_post_analysis_processor
+
+
+class FeatureAnalyzerConfig(BaseConfig):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    total_analyzing_tokens: int
+    """Total number of tokens to analyze."""
+
+    ignore_token_ids: list[int] | None = None
+    """Tokens to ignore in the activations."""
+
+    subsamples: dict[str, dict[str, int | float]] = Field(
+        default_factory=lambda: {
+            "top_activations": {"proportion": 1.0, "n_samples": 10},
+            "non_activating": {
+                "proportion": 0.3,
+                "n_samples": 20,
+                "max_length": 50,
+            },
+        }
+    )
+    """Dictionary mapping subsample names to sampling parameters."""
+
+    clt_layer: int | None = None
+    """Layer to analyze for CLT. Provided iff analyzing CLT."""
 
 
 class FeatureAnalyzer:
@@ -171,7 +197,7 @@ class FeatureAnalyzer:
     def analyze_chunk(
         self,
         activation_factory: ActivationFactory,
-        sae: AbstractSparseAutoEncoder,
+        sae: SparseDictionary,
         device_mesh: DeviceMesh | None = None,
         activation_factory_process_kwargs: dict[str, Any] = {},
     ) -> list[dict[str, Any]]:
@@ -259,7 +285,7 @@ class FeatureAnalyzer:
                 feature_acts = feature_acts.redistribute(placements=DimMap({"model": -1}).placements(device_mesh))
                 if not isinstance(tokens, DTensor):
                     tokens = DTensor.from_local(tokens, device_mesh, placements=DimMap({}).placements(device_mesh))
-            if isinstance(sae, CrossCoder):
+            if isinstance(sae, Crosscoder):
                 feature_acts = feature_acts.amax(dim=-2)
             if isinstance(sae, LowRankSparseAttention) and sae.cfg.skip_bos:
                 feature_acts[:, 0, :] = 0
