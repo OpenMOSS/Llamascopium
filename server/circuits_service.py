@@ -733,7 +733,7 @@ def run_circuit_trace(
     max_feature_nodes: int = DEFAULT_MAX_FEATURE_NODES,
     batch_size: int = 1,
     order_mode: str = "abs",
-    mongo_uri: str = "mongodb://10.245.47.235:27017",
+    mongo_uri: str = "mongodb://10.246.78.161:27017",
     mongo_db: str = "mechinterp",
     sae_series: str = "BT4-exp128",
     act_times_max: Optional[int] = None,
@@ -937,7 +937,7 @@ def main():
                        choices=["positive", "negative", "move_pair", "group"],
                        help="Sorting mode")
     
-    parser.add_argument("--mongo_uri", type=str, default="mongodb://10.245.47.235:27017",
+    parser.add_argument("--mongo_uri", type=str, default="mongodb://10.246.78.161:27017",
                        help="MongoDB URI")
     parser.add_argument("--mongo_db", type=str, default="mechinterp",
                        help="MongoDB database name")

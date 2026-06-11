@@ -1909,6 +1909,14 @@ class LowRankSparseAttention(AbstractSparseAutoEncoder):
             return loss, (loss_dict, aux_data)
         return loss
 
+    @override
+    def load_full_state_dict(self, state_dict: dict[str, torch.Tensor], device_mesh: DeviceMesh | None = None) -> None:
+        """Load weights, remapping legacy ``attn_scale`` keys to ``_attn_scale_param``."""
+        state_dict = dict(state_dict)
+        if "attn_scale" in state_dict and "_attn_scale_param" not in state_dict:
+            state_dict["_attn_scale_param"] = state_dict.pop("attn_scale")
+        super().load_full_state_dict(state_dict, device_mesh=device_mesh)
+
     @classmethod
     def from_pretrained(
         cls,

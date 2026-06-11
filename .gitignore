@@ -222,3 +222,7 @@ analyze_mlp_*.sh
 # Log files and utility scripts
 mongodb_error_log.txt
 restore_meta.py
+
+# Local circuits 
+/circuits_local
+/interaction_circuitg
