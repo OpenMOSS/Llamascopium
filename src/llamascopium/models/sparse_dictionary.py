@@ -150,6 +150,9 @@ class SparseDictionaryConfig(BaseModelConfig, ABC):
     @property
     def d_sae(self) -> int:
         """The hidden dimension of the sparse dictionary. Calculated as `d_model * expansion_factor`."""
+        assert math.isclose(
+            self.d_model * self.expansion_factor, round(self.d_model * self.expansion_factor), rel_tol=0.0, abs_tol=1e-6
+        ), "d_model * expansion_factor must be an integer"
         d_sae = int(self.d_model * self.expansion_factor)
         return d_sae
 
@@ -806,9 +809,10 @@ class SparseDictionary(HookedRootModule, ABC):
         self,
         batch: dict[str, torch.Tensor],
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", None] = None,
+        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
         tanh_stretch_coefficient: float = 4.0,
         p: int = 1,
+        target_l0: float | None = None,
         l1_coefficient: float = 1.0,
         lp_coefficient: float = 0.0,
         auxk_coefficient: float = 0.0,
@@ -824,9 +828,10 @@ class SparseDictionary(HookedRootModule, ABC):
         self,
         batch: dict[str, torch.Tensor],
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", None] = None,
+        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
         tanh_stretch_coefficient: float = 4.0,
         p: int = 1,
+        target_l0: float | None = None,
         l1_coefficient: float = 1.0,
         lp_coefficient: float = 0.0,
         auxk_coefficient: float = 0.0,
@@ -849,10 +854,11 @@ class SparseDictionary(HookedRootModule, ABC):
             | None
         ) = None,
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", None] = None,
+        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
         tanh_stretch_coefficient: float = 4.0,
         frequency_scale: float = 0.01,
         p: int = 1,
+        target_l0: float | None = None,
         l1_coefficient: float = 1.0,
         lp_coefficient: float = 0.0,
         auxk_coefficient: float = 0.0,
@@ -915,6 +921,20 @@ class SparseDictionary(HookedRootModule, ABC):
                                 "mean",
                             )
                         l_s = (approx_frequency * (1 + approx_frequency / frequency_scale)).sum(dim=-1)
+                    elif sparsity_loss_type == "jumprelu-l0-quad":
+                        assert isinstance(self.activation_function, JumpReLU), (
+                            "jumprelu-l0-quad sparsity loss requires JumpReLU activation"
+                        )
+                        assert target_l0 is not None and target_l0 > 0, (
+                            "target_l0 must be positive for jumprelu-l0-quad sparsity loss"
+                        )
+                        hidden_pre_for_l0_loss = (
+                            hidden_pre * self.decoder_norm()
+                            if self.cfg.sparsity_include_decoder_norm
+                            else hidden_pre
+                        )
+                        l0 = self.activation_function.l0(hidden_pre_for_l0_loss).sum(dim=-1)
+                        l_s = (2 / target_l0) * (l0 - target_l0).pow(2)
                     else:
                         raise ValueError(f"sparsity_loss_type f{sparsity_loss_type} not supported.")
                     l_s = l1_coefficient * l_s

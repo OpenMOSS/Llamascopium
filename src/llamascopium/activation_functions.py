@@ -64,6 +64,54 @@ class STEFunction(torch.autograd.Function):
         return x_grad, grad_jumprelu_threshold, None, None
 
 
+class JumpReLUL0Function(torch.autograd.Function):
+    """
+    STE approximation for the JumpReLU L0 indicator.
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        jumprelu_threshold: torch.Tensor,
+        jumprelu_threshold_window: float,
+        dims_to_keep_in_bwd: tuple[int, ...],
+    ):
+        active = input.gt(jumprelu_threshold)
+        ctx.save_for_backward(
+            input,
+            jumprelu_threshold,
+            torch.tensor(jumprelu_threshold_window, dtype=input.dtype, device=input.device),
+        )
+        ctx.dims_to_keep_in_bwd = dims_to_keep_in_bwd
+        return active.to(input.dtype)
+
+    @staticmethod
+    def backward(ctx, *grad_outputs: torch.Tensor, **args):
+        assert len(grad_outputs) == 1
+        grad_output = grad_outputs[0]
+
+        input, jumprelu_threshold, jumprelu_threshold_window = ctx.saved_tensors
+        threshold_window = (input - jumprelu_threshold).abs() < jumprelu_threshold_window * 0.5
+        grad_jumprelu_threshold = (
+            torch.where(
+                threshold_window * (input > 0.0),
+                -jumprelu_threshold / jumprelu_threshold_window,
+                0.0,
+            )
+            * grad_output
+        )
+        grad_jumprelu_threshold = grad_jumprelu_threshold.sum(
+            dim=tuple(
+                i
+                for i in range(grad_jumprelu_threshold.ndim)
+                if i not in ctx.dims_to_keep_in_bwd and i - grad_jumprelu_threshold.ndim not in ctx.dims_to_keep_in_bwd
+            )
+        )
+
+        return torch.zeros_like(input), grad_jumprelu_threshold, None, None
+
+
 class JumpReLU(torch.nn.Module):
     """
     JumpReLU activation function.
@@ -123,6 +171,17 @@ class JumpReLU(torch.nn.Module):
 
     def get_jumprelu_threshold(self) -> torch.Tensor:
         return self.log_jumprelu_threshold.exp()
+
+    def l0(self, input: torch.Tensor) -> torch.Tensor:
+        return cast(
+            torch.Tensor,
+            JumpReLUL0Function.apply(
+                input.to(self.dtype),
+                self.log_jumprelu_threshold.exp(),
+                self.jumprelu_threshold_window,
+                self.dims_to_keep_in_bwd,
+            ),
+        ).to(input.dtype)
 
     def dim_maps(self) -> dict[str, DimMap]:
         return {
