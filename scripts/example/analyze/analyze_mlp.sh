@@ -28,7 +28,8 @@ done
 
 CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --master_port=29300 \
   exp/analyze_lc0_mlp_BT4.py \
-    --layer 0
+    --layer 0 \
+    --n_tokens 10000
 
 
 

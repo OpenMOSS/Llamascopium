@@ -17,3 +17,4 @@ BT4 Failure Case Perturb2 8/5B2/2R5/1pP1p1k1/rP2Pb2/6pK/8/8 b - - 2 50
 Search Failure Case 1r2rkbQ/p2n2p1/2pb1pP1/q2p4/3P3N/2pBB2P/PP3P2/1K4RR w - - 5 24
 Search Failure Case post 1r2r1b1/p2n2Pk/2pb1p2/q2p1N2/3P4/2pBB2P/PP3P2/1K4RR w - - 1 27
 mateIn6 failure 1r6/b1p2p1k/p2p1Prp/1pnP1Q2/5P1N/1P4PP/P3R2K/2q5 w - - 3 34
+Defense r1bqr1k1/pp1nbpp1/2p2n2/6P1/2BP4/P7/1PQNNPP1/R3K2R b - - 0 1
