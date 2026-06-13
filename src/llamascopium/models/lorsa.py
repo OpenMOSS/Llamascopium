@@ -884,59 +884,30 @@ class LowRankSparseAttention(
         k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
     ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
-        if isinstance(q, DTensor) or isinstance(k, DTensor) or isinstance(v, DTensor):
-            q_local = q.to_local() if isinstance(q, DTensor) else q
-            k_local = k.to_local() if isinstance(k, DTensor) else k
-            v_local = v.to_local() if isinstance(v, DTensor) else v
+        uses_dtensor = (
+            isinstance(q, DTensor)
+            or isinstance(k, DTensor)
+            or isinstance(v, DTensor)
+            or isinstance(self.mask, DTensor)
+        )
+        q_work = q.to_local() if isinstance(q, DTensor) else q
+        k_work = k.to_local() if isinstance(k, DTensor) else k
+        v_work = v.to_local() if isinstance(v, DTensor) else v
 
-            if self.cfg.attn_type == "local" and self.cfg.d_qk_head != self.cfg.ov_group_size:
-                hidden_pre_local = self._compute_local_hidden_pre_on_shard(q_local, k_local, v_local)
-            else:
-                query_local = q_local.permute(0, 2, 1, 3)
-                key_local = k_local.permute(0, 2, 1, 3)
-                value_local = v_local.reshape(*k_local.shape[:3], -1).permute(0, 2, 1, 3)
+        if self.cfg.attn_type == "local" and self.cfg.d_qk_head != self.cfg.ov_group_size:
+            hidden_pre = self._compute_local_hidden_pre_on_shard(q_work, k_work, v_work)
+            if uses_dtensor and self.device_mesh is not None:
+                return DimMap({"data": 0, "model": 2}).from_local(hidden_pre, self.device_mesh)
+            return hidden_pre
 
-                attn_mask_local = None
-                is_causal = self.cfg.attn_type == "global"
-                if self.cfg.attn_type == "local":
-                    mask = self.mask.to_local() if isinstance(self.mask, DTensor) else self.mask
-                    attn_mask_local = mask[None, None, -query_local.size(-2) :, -key_local.size(-2) :].to(
-                        query_local.device
-                    )
-
-                with sdpa_kernel(
-                    backends=[
-                        SDPBackend.FLASH_ATTENTION,
-                        SDPBackend.CUDNN_ATTENTION,
-                        SDPBackend.EFFICIENT_ATTENTION,
-                        SDPBackend.MATH,
-                    ]
-                ):
-                    z_local = F.scaled_dot_product_attention(
-                        query_local,
-                        key_local,
-                        value_local,
-                        scale=1 / self.attn_scale,
-                        enable_gqa=True,
-                        attn_mask=attn_mask_local,
-                        is_causal=is_causal,
-                    )
-                hidden_pre_local = z_local.permute(0, 2, 1, 3).reshape(*v_local.shape)
-
-            if self.device_mesh is not None:
-                return DimMap({"data": 0, "model": 2}).from_local(hidden_pre_local, self.device_mesh)
-            return hidden_pre_local
-
-        query = q.permute(0, 2, 1, 3)  # (batch, qk_heads, q_pos, qk_dim)
-        key = k.permute(0, 2, 1, 3)  # (batch, qk_heads, k_pos, qk_dim)
-
-        value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
+        query = q_work.permute(0, 2, 1, 3)  # (batch, qk_heads, q_pos, qk_dim)
+        key = k_work.permute(0, 2, 1, 3)  # (batch, qk_heads, k_pos, qk_dim)
+        value = v_work.reshape(*k_work.shape[:3], -1).permute(0, 2, 1, 3)
         attn_mask = None
         is_causal = self.cfg.attn_type == "global"
         if self.cfg.attn_type == "local":
-            attn_mask = self.mask[None, None, -query.size(-2) :, -key.size(-2) :]  # type: ignore[index]
-            if not isinstance(attn_mask, DTensor):
-                attn_mask = attn_mask.to(query.device)
+            mask = self.mask.to_local() if isinstance(self.mask, DTensor) else self.mask
+            attn_mask = mask[None, None, -query.size(-2) :, -key.size(-2) :].to(query.device)  # type: ignore[index]
 
         with sdpa_kernel(
             backends=[
@@ -955,7 +926,10 @@ class LowRankSparseAttention(
                 attn_mask=attn_mask,
                 is_causal=is_causal,
             )
-        return z.permute(0, 2, 1, 3).reshape(*v.shape)
+        hidden_pre = z.permute(0, 2, 1, 3).reshape(*v_work.shape)
+        if uses_dtensor and self.device_mesh is not None:
+            return DimMap({"data": 0, "model": 2}).from_local(hidden_pre, self.device_mesh)
+        return hidden_pre
 
     def _compute_local_hidden_pre_on_shard(
         self,
