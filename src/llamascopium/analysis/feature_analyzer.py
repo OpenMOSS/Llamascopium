@@ -96,6 +96,17 @@ class FeatureAnalyzer:
         # Compute exponential lottery ticket values for sampling if enabled
         elt = feature_acts.clamp(min=0.0).max(dim=1).values
 
+        def expand_meta(v: torch.Tensor) -> torch.Tensor:
+            if v.ndim == 1:
+                return repeat(
+                    v,
+                    "batch_size -> batch_size d_sae",
+                    d_sae=feature_acts.size(-1),
+                )
+            if v.ndim == 2:
+                return v
+            raise ValueError(f"Metadata tensors must be 1D or 2D, got shape {v.shape}")
+
         # Process each subsample type (e.g. top activations)
         for name in self.cfg.subsamples.keys():
             elt_cur = elt.clone()
@@ -116,12 +127,7 @@ class FeatureAnalyzer:
                 ),
                 # **discrete_meta,
                 **{
-                    k: repeat(
-                        v,
-                        "batch_size -> batch_size d_sae",
-                        d_sae=feature_acts.size(-1),
-                    )
-                    for k, v in discrete_meta.items()
+                    k: expand_meta(v) for k, v in discrete_meta.items()
                 },
             }
 
@@ -287,7 +293,7 @@ class FeatureAnalyzer:
                     tokens = DTensor.from_local(tokens, device_mesh, placements=DimMap({}).placements(device_mesh))
             if isinstance(sae, Crosscoder):
                 feature_acts = feature_acts.amax(dim=-2)
-            if isinstance(sae, LowRankSparseAttention) and sae.cfg.skip_bos:
+            if isinstance(sae, LowRankSparseAttention) and getattr(sae.cfg, "skip_bos", False):
                 feature_acts[:, 0, :] = 0
             assert feature_acts.shape == (tokens.shape[0], tokens.shape[1], sae.cfg.d_sae), (
                 f"feature_acts.shape: {feature_acts.shape}, expected: {(tokens.shape[0], tokens.shape[1], sae.cfg.d_sae)}"

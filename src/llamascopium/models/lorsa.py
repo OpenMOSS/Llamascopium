@@ -884,22 +884,51 @@ class LowRankSparseAttention(
         k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
     ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
-        query = q.permute(0, 2, 1, 3)  # (batch, qk_heads, q_pos, qk_dim)
-        key = k.permute(0, 2, 1, 3)  # (batch, qk_heads, k_pos, qk_dim)
-
-        use_manual_local_attention = (
-            self.cfg.attn_type == "local"
-            and self.cfg.d_qk_head != self.cfg.ov_group_size
-            and isinstance(query, DTensor)
-        )
-        if use_manual_local_attention:
+        if isinstance(q, DTensor) or isinstance(k, DTensor) or isinstance(v, DTensor):
             q_local = q.to_local() if isinstance(q, DTensor) else q
             k_local = k.to_local() if isinstance(k, DTensor) else k
             v_local = v.to_local() if isinstance(v, DTensor) else v
-            hidden_pre_local = self._compute_local_hidden_pre_on_shard(q_local, k_local, v_local)
+
+            if self.cfg.attn_type == "local" and self.cfg.d_qk_head != self.cfg.ov_group_size:
+                hidden_pre_local = self._compute_local_hidden_pre_on_shard(q_local, k_local, v_local)
+            else:
+                query_local = q_local.permute(0, 2, 1, 3)
+                key_local = k_local.permute(0, 2, 1, 3)
+                value_local = v_local.reshape(*k_local.shape[:3], -1).permute(0, 2, 1, 3)
+
+                attn_mask_local = None
+                is_causal = self.cfg.attn_type == "global"
+                if self.cfg.attn_type == "local":
+                    mask = self.mask.to_local() if isinstance(self.mask, DTensor) else self.mask
+                    attn_mask_local = mask[None, None, -query_local.size(-2) :, -key_local.size(-2) :].to(
+                        query_local.device
+                    )
+
+                with sdpa_kernel(
+                    backends=[
+                        SDPBackend.FLASH_ATTENTION,
+                        SDPBackend.CUDNN_ATTENTION,
+                        SDPBackend.EFFICIENT_ATTENTION,
+                        SDPBackend.MATH,
+                    ]
+                ):
+                    z_local = F.scaled_dot_product_attention(
+                        query_local,
+                        key_local,
+                        value_local,
+                        scale=1 / self.attn_scale,
+                        enable_gqa=True,
+                        attn_mask=attn_mask_local,
+                        is_causal=is_causal,
+                    )
+                hidden_pre_local = z_local.permute(0, 2, 1, 3).reshape(*v_local.shape)
+
             if self.device_mesh is not None:
                 return DimMap({"data": 0, "model": 2}).from_local(hidden_pre_local, self.device_mesh)
             return hidden_pre_local
+
+        query = q.permute(0, 2, 1, 3)  # (batch, qk_heads, q_pos, qk_dim)
+        key = k.permute(0, 2, 1, 3)  # (batch, qk_heads, k_pos, qk_dim)
 
         value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
         attn_mask = None
@@ -955,9 +984,9 @@ class LowRankSparseAttention(
             k_start = max(0, q_start - self.cfg.window_size + 1)
             k_end = q_end
 
-            q_chunk = q[:, q_start:q_end].permute(0, 2, 1, 3)  # (b, h, q, d)
-            k_chunk = k[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, d)
-            v_chunk = value[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, r)
+            q_chunk = q[:, q_start:q_end].permute(0, 2, 1, 3)  # [bhqd]
+            k_chunk = k[:, k_start:k_end].permute(0, 2, 1, 3)  # [bhkd]
+            v_chunk = value[:, k_start:k_end].permute(0, 2, 1, 3)  # [bhkr]
 
             scores = torch.einsum("bhqd,bhkd->bhqk", q_chunk, k_chunk).to(torch.float32) * scale
 

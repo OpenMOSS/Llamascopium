@@ -9,6 +9,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from torch.distributed.device_mesh import DeviceMesh
 
 from server.logic.loaders import get_dataset, get_model, get_sae
+from server.logic.samples import cached_extract_samples
 from server.logic.workers import DistributedWorkerRegistry, distributed
 from server.routers import admin, bookmarks, circuits, dictionaries
 from server.routers.circuits import load_circuit_graph
@@ -27,6 +28,7 @@ def workers_on_unmount(device_mesh: DeviceMesh | None = None):
     get_model.cache_clear()
     get_dataset.cache_clear()
     get_sae.cache_clear()
+    cached_extract_samples.cache_clear()
     load_circuit_graph.cache_clear()
 
 
@@ -59,6 +61,7 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(workers_on_unmount())
     get_model.cache_clear()
     get_dataset.cache_clear()
+    cached_extract_samples.cache_clear()
     load_circuit_graph.cache_clear()
     await task
     DistributedWorkerRegistry.shutdown()
@@ -87,6 +90,7 @@ async def oom_error_handler(request, exc):
     get_model.cache_clear()
     get_dataset.cache_clear()
     get_sae.cache_clear()
+    cached_extract_samples.cache_clear()
     return Response(content="CUDA Out of memory", status_code=500)
 
 

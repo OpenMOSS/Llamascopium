@@ -4,10 +4,18 @@ from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
 from server.config import client, sae_series
+from server.logic.samples import cached_extract_samples
 from server.logic.loaders import get_sae
 from server.utils.common import natural_sort_key
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.post("/cache/clear-samples")
+def admin_clear_sample_cache():
+    """Clear cached feature activation samples."""
+    cached_extract_samples.cache_clear()
+    return {"message": "Sample cache cleared"}
 
 
 @router.get("/saes")
