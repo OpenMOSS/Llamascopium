@@ -367,12 +367,8 @@ class LowRankSparseAttention(
             )
             if self.cfg.use_post_qk_ln and self.cfg.normalization_type == "RMS":
                 q_norm_w, k_norm_w = self._expanded_mhsa_qk_norm_weights(mhsa)
-                self.ln_q.w = nn.Parameter(
-                    torch.repeat_interleave(q_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype)
-                )
-                self.ln_k.w = nn.Parameter(
-                    torch.repeat_interleave(k_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype)
-                )
+                self.ln_q.w = nn.Parameter(torch.repeat_interleave(q_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype))
+                self.ln_k.w = nn.Parameter(torch.repeat_interleave(k_norm_w, qk_exp_factor, dim=0).to(self.cfg.dtype))
 
     @torch.no_grad()
     @torch.autocast(device_type="cuda", dtype=torch.bfloat16)
@@ -469,55 +465,7 @@ class LowRankSparseAttention(
         if isinstance(x, DTensor):
             x = x.to_local()
 
-        total_orig_ov = mhsa.cfg.n_heads * mhsa.cfg.d_head
-        if total_orig_ov != mhsa.cfg.d_model:
-            if self.cfg.n_ov_heads % total_orig_ov != 0:
-                raise ValueError(
-                    "For models with n_heads * d_head != d_model, "
-                    "d_model * expansion_factor must be divisible by n_heads * d_head. "
-                    f"Got d_model * expansion_factor = {self.cfg.n_ov_heads}, "
-                    f"n_heads * d_head = {total_orig_ov}."
-                )
-
-            feature_repeats_per_ov = self.cfg.n_ov_heads // total_orig_ov
-            orig_W_V = mhsa.W_V.permute(0, 2, 1).reshape(total_orig_ov, self.cfg.d_model)
-            orig_W_O = mhsa.W_O.reshape(total_orig_ov, self.cfg.d_model)
-
-            if self.device_mesh is not None:
-                assert isinstance(self.W_O, DTensor)
-                assert isinstance(self.W_V, DTensor)
-                model_parallel_rank = self.device_mesh.get_local_rank(mesh_dim="model")
-                model_parallel_size = mesh_dim_size(self.device_mesh, "model")
-                feature_start = model_parallel_rank * self.cfg.n_ov_heads // model_parallel_size
-                feature_end = (model_parallel_rank + 1) * self.cfg.n_ov_heads // model_parallel_size
-
-                local_feature_indices = torch.arange(feature_start, feature_end, device=orig_W_V.device)
-                orig_ov_indices = torch.div(local_feature_indices, feature_repeats_per_ov, rounding_mode="floor")
-
-                W_V_local = orig_W_V[orig_ov_indices].clone()
-                W_O_local = orig_W_O[orig_ov_indices].clone()
-                W_V_local = W_V_local / W_V_local.norm(dim=1, keepdim=True)
-                W_O_local = W_O_local / W_O_local.norm(dim=1, keepdim=True)
-                torch.distributed.broadcast(tensor=W_O_local, group=self.device_mesh.get_group("data"), group_src=0)
-                torch.distributed.broadcast(tensor=W_V_local, group=self.device_mesh.get_group("data"), group_src=0)
-                W_O_global = DTensor.from_local(
-                    W_O_local, device_mesh=self.device_mesh, placements=self.dim_maps()["W_O"].placements(self.device_mesh)
-                )
-                W_V_global = DTensor.from_local(
-                    W_V_local, device_mesh=self.device_mesh, placements=self.dim_maps()["W_V"].placements(self.device_mesh)
-                )
-                self.W_O.copy_(W_O_global)
-                self.W_V.copy_(W_V_global)
-            else:
-                repeated_W_V = torch.repeat_interleave(orig_W_V, feature_repeats_per_ov, dim=0)
-                repeated_W_O = torch.repeat_interleave(orig_W_O, feature_repeats_per_ov, dim=0)
-                self.W_V.copy_(repeated_W_V / repeated_W_V.norm(dim=1, keepdim=True))
-                self.W_O.copy_(repeated_W_O / repeated_W_O.norm(dim=1, keepdim=True))
-            return
-
-        v_per_head = (
-            x.reshape(-1, self.cfg.d_model) @ mhsa.W_V.permute(1, 0, 2).reshape(mhsa.cfg.d_model, mhsa.cfg.d_model)
-        ).reshape(-1, mhsa.cfg.n_heads, mhsa.cfg.d_head)
+        v_per_head = torch.einsum("bd,ndh->bnh", x.reshape(-1, self.cfg.d_model), mhsa.W_V)
         captured_v = torch.einsum("bnh,nhd->bnd", v_per_head, mhsa.W_V.permute(0, 2, 1))
 
         n_ov_per_orig_head = self.cfg.n_ov_heads // mhsa.cfg.n_heads
@@ -930,47 +878,37 @@ class LowRankSparseAttention(
 
         return torch.cat([x_rotated, x_pass], dim=-1)
 
-    def _sdpa_attention_kwargs(
-        self,
-        query: Float[torch.Tensor, "batch n_qk_heads q_pos d_qk_head"],
-        key: Float[torch.Tensor, "batch n_qk_heads k_pos d_qk_head"],
-    ) -> dict[str, Any]:
-        if self.cfg.attn_type == "global":
-            return {"attn_mask": None, "is_causal": True}
-
-        mask = self.mask[None, None, -query.size(-2) :, -key.size(-2) :]  # type: ignore[index]
-        if not isinstance(mask, DTensor):
-            mask = mask.to(query.device)
-        return {"attn_mask": mask, "is_causal": False}
-
-    def _should_use_manual_attention(
-        self,
-        query: Float[torch.Tensor, "batch n_qk_heads q_pos d_qk_head"],
-    ) -> bool:
-        return (
-            self.cfg.attn_type == "local"
-            and self.cfg.d_qk_head != self.cfg.ov_group_size
-            and isinstance(query, DTensor)
-        )
-
     def _compute_hidden_pre_with_sdpa_or_manual(
         self,
         q: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
     ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
-        query = q.permute(0, 2, 1, 3)
-        key = k.permute(0, 2, 1, 3)
-        if self._should_use_manual_attention(query):
-            q_local = q.to_local() if isinstance(q, DTensor) else q
-            k_local = k.to_local() if isinstance(k, DTensor) else k
-            v_local = v.to_local() if isinstance(v, DTensor) else v
-            hidden_pre_local = self._compute_local_sliding_window_hidden_pre_local(q_local, k_local, v_local)
-            if self.device_mesh is not None:
-                return DimMap({"data": 0, "model": 2}).from_local(hidden_pre_local, self.device_mesh)
-            return hidden_pre_local
+        uses_dtensor = (
+            isinstance(q, DTensor)
+            or isinstance(k, DTensor)
+            or isinstance(v, DTensor)
+            or isinstance(self.mask, DTensor)
+        )
+        q_work = q.to_local() if isinstance(q, DTensor) else q
+        k_work = k.to_local() if isinstance(k, DTensor) else k
+        v_work = v.to_local() if isinstance(v, DTensor) else v
 
-        value = v.reshape(*k.shape[:3], -1).permute(0, 2, 1, 3)
+        if self.cfg.attn_type == "local" and self.cfg.d_qk_head != self.cfg.ov_group_size:
+            hidden_pre = self._compute_local_hidden_pre_on_shard(q_work, k_work, v_work)
+            if uses_dtensor and self.device_mesh is not None:
+                return DimMap({"data": 0, "model": 2}).from_local(hidden_pre, self.device_mesh)
+            return hidden_pre
+
+        query = q_work.permute(0, 2, 1, 3)  # (batch, qk_heads, q_pos, qk_dim)
+        key = k_work.permute(0, 2, 1, 3)  # (batch, qk_heads, k_pos, qk_dim)
+        value = v_work.reshape(*k_work.shape[:3], -1).permute(0, 2, 1, 3)
+        attn_mask = None
+        is_causal = self.cfg.attn_type == "global"
+        if self.cfg.attn_type == "local":
+            mask = self.mask.to_local() if isinstance(self.mask, DTensor) else self.mask
+            attn_mask = mask[None, None, -query.size(-2) :, -key.size(-2) :].to(query.device)  # type: ignore[index]
+
         with sdpa_kernel(
             backends=[
                 SDPBackend.FLASH_ATTENTION,
@@ -985,23 +923,21 @@ class LowRankSparseAttention(
                 value,
                 scale=1 / self.attn_scale,
                 enable_gqa=True,
-                **self._sdpa_attention_kwargs(query=query, key=key),
+                attn_mask=attn_mask,
+                is_causal=is_causal,
             )
-        return z.permute(0, 2, 1, 3).reshape(*v.shape)
+        hidden_pre = z.permute(0, 2, 1, 3).reshape(*v_work.shape)
+        if uses_dtensor and self.device_mesh is not None:
+            return DimMap({"data": 0, "model": 2}).from_local(hidden_pre, self.device_mesh)
+        return hidden_pre
 
-    def _compute_local_sliding_window_hidden_pre_local(
+    def _compute_local_hidden_pre_on_shard(
         self,
         q: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         k: Float[torch.Tensor, "batch seq_len n_qk_heads d_qk_head"],
         v: Float[torch.Tensor, "batch seq_len n_ov_heads"],
     ) -> Float[torch.Tensor, "batch seq_len d_sae"]:
-        """Compute local-attention hidden_pre on a single TP shard without SDPA.
-
-        This path is only used for the problematic combination of:
-        local attention + DTensor tensor parallelism + d_qk_head != ov_group_size.
-        It keeps the existing TP partitioning by operating directly on the local shard,
-        and only materializes per-chunk sliding-window scores instead of a full seq x seq matrix.
-        """
+        """Compute chunked local attention on one tensor-parallel shard."""
         assert self.cfg.window_size is not None, "window_size must be provided for local attention"
         batch_size, seq_len, n_qk_heads_local, _ = q.shape
         ov_group_size = self.cfg.ov_group_size
@@ -1022,9 +958,9 @@ class LowRankSparseAttention(
             k_start = max(0, q_start - self.cfg.window_size + 1)
             k_end = q_end
 
-            q_chunk = q[:, q_start:q_end].permute(0, 2, 1, 3)  # (b, h, q, d)
-            k_chunk = k[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, d)
-            v_chunk = value[:, k_start:k_end].permute(0, 2, 1, 3)  # (b, h, k, r)
+            q_chunk = q[:, q_start:q_end].permute(0, 2, 1, 3)  # [bhqd]
+            k_chunk = k[:, k_start:k_end].permute(0, 2, 1, 3)  # [bhkd]
+            v_chunk = value[:, k_start:k_end].permute(0, 2, 1, 3)  # [bhkr]
 
             scores = torch.einsum("bhqd,bhkd->bhqk", q_chunk, k_chunk).to(torch.float32) * scale
 

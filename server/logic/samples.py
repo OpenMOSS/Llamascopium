@@ -64,6 +64,10 @@ def extract_samples(
             "Origins and feature acts must not be None"
         )
 
+        # Stored sample indices are over analyzable tokens, while trace origins
+        # include the leading BOS token position. Return trace-aligned indices
+        # so the frontend can index origins directly.
+        token_index_offset = 1
         token_offset = 0
         if visible_range is not None:  # Drop tokens before and after the highest activating token
             if len(feature_acts_indices) == 0:
@@ -89,6 +93,11 @@ def extract_samples(
             token_offset = max(0, max_feature_act_index - visible_range)
 
             origins = origins[token_offset : max_feature_act_index + visible_range]
+
+        if token_index_offset:
+            feature_acts_indices = feature_acts_indices + token_index_offset
+            if z_pattern_indices is not None:
+                z_pattern_indices = z_pattern_indices + token_index_offset
 
         text_offset = None
         if "text" in data:

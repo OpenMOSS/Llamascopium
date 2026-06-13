@@ -29,7 +29,7 @@ logger = get_distributed_logger(__name__)
 
 class MongoDBConfig(BaseModel):
     mongo_uri: str = Field(default_factory=lambda: os.environ.get("MONGO_URI", "mongodb://localhost:27017/"))
-    mongo_db: str = Field(default_factory=lambda: os.environ.get("MONGO_DB", "mechinterp"))
+    mongo_db: str = Field(default_factory=lambda: os.environ.get("MONGO_DB", "llamascope2"))
 
 
 class DatasetRecord(BaseModel):

@@ -458,7 +458,10 @@ class NodeDimension(PyTree):
 
     @classmethod
     def __structure__(cls, data: dict[str, Any]) -> Self:
-        return cls._from_node_mappings(node_mappings=structure(data, dict[Any, Node]))
+        node_mappings = structure(data, dict[Any, Node])
+        if len(node_mappings) == 0:
+            return cls.empty(device="cpu")
+        return cls._from_node_mappings(node_mappings=node_mappings)
 
 
 @dataclass
