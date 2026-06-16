@@ -20,7 +20,7 @@ class Metadata(BaseModel):
     prompt: str
     
     node_threshold: float | None = None
-    schema_version: int | None = 1
+    schema_version: int | None = 2
     lorsa_analysis_name: str | None = None
     tc_analysis_name: str | None = None
     logit_moves: List[str] = []
@@ -39,6 +39,7 @@ class Node(BaseModel):
     jsNodeId: str
     clerp: str = ""
     influence: float | None = None
+    raw_influence: float | None = None
     activation: float | None = None
 
     def __init__(self, **data):
@@ -47,8 +48,8 @@ class Node(BaseModel):
         super().__init__(**data)
 
     @classmethod
-    def feature_node(cls, layer, pos, feat_idx, is_lorsa, influence=None, 
-                     activation=None):
+    def feature_node(cls, layer, pos, feat_idx, is_lorsa, influence=None,
+                     raw_influence=None, activation=None):
         """Create a feature node."""
 
         def cantor_pairing(x, y):
@@ -64,11 +65,12 @@ class Node(BaseModel):
             feature_type="lorsa" if is_lorsa else "cross layer transcoder",
             jsNodeId=f"{layer}_{feat_idx}-{reverse_ctx_idx}",
             influence=influence,
+            raw_influence=raw_influence,
             activation=activation,
         )
 
     @classmethod
-    def error_node(cls, layer, pos, is_lorsa, influence=None):
+    def error_node(cls, layer, pos, is_lorsa, influence=None, raw_influence=None):
         """Create an error node."""
         reverse_ctx_idx = 0
         return cls(
@@ -79,10 +81,11 @@ class Node(BaseModel):
             feature_type="lorsa error" if is_lorsa else "mlp reconstruction error",
             jsNodeId=f"{layer}_{pos}-{reverse_ctx_idx}",
             influence=influence,
+            raw_influence=raw_influence,
         )
 
     @classmethod
-    def token_node(cls, pos, vocab_idx, influence=None):
+    def token_node(cls, pos, vocab_idx, influence=None, raw_influence=None):
         """Create a token node."""
         return cls(
             node_id=f"E_{vocab_idx}_{pos}",
@@ -92,6 +95,7 @@ class Node(BaseModel):
             feature_type="embedding",
             jsNodeId=f"E_{vocab_idx}-{pos}",
             influence=influence,
+            raw_influence=raw_influence,
         )
 
     @classmethod
@@ -103,6 +107,7 @@ class Node(BaseModel):
         num_layers,
         target_logit=False,
         token_prob=0.0,
+        raw_influence=None,
     ):
         """Create a logit node."""
         layer = 2 * num_layers
@@ -116,6 +121,7 @@ class Node(BaseModel):
             is_target_logit=target_logit,
             jsNodeId=f"L_{vocab_idx}-{pos}",
             clerp=f'Output "{token}" (p={token_prob:.3f})',
+            raw_influence=raw_influence,
         )
 
 
@@ -166,6 +172,7 @@ def create_nodes(
     graph: Graph,
     node_mask: torch.Tensor,
     cumulative_scores: torch.Tensor,
+    node_influence: torch.Tensor,
     to_uci: Optional[Callable[[int], str]] = None,
 ):
     """Create all nodes for the graph."""
@@ -205,6 +212,7 @@ def create_nodes(
                 feat_idx=feat_idx,
                 is_lorsa=is_lorsa,
                 influence=float(cumulative_scores[node_idx]),
+                raw_influence=float(node_influence[node_idx]),
                 activation=float(activation_value),
             )
 
@@ -221,6 +229,7 @@ def create_nodes(
                 pos=int(pos),
                 is_lorsa=is_lorsa,
                 influence=float(cumulative_scores[node_idx]),
+                raw_influence=float(node_influence[node_idx]),
             )
 
         elif node_idx in range(error_end_idx, token_end_idx):
@@ -231,6 +240,7 @@ def create_nodes(
                 pos=int(pos),
                 vocab_idx=dummy_vocab_idx,
                 influence=float(cumulative_scores[node_idx]),
+                raw_influence=float(node_influence[node_idx]),
             )
 
         elif node_idx in range(token_end_idx, len(cumulative_scores)):
@@ -250,6 +260,7 @@ def create_nodes(
                 target_logit=(pos == 0),
                 token_prob=float(graph.logit_probabilities[pos]),
                 num_layers=int(layers),
+                raw_influence=float(node_influence[node_idx]),
             )
 
     total_time = (time.time() - start_time) * 1000
@@ -444,12 +455,12 @@ def create_graph_files(
     print(f'{target_move = }') 
     print(f'{graph.adjacency_matrix.shape = }')
     
-    node_mask, edge_mask, cumulative_scores = (
+    node_mask, edge_mask, cumulative_scores, node_influence = (
         el.to(device) for el in prune_graph(graph, node_threshold, edge_threshold)
     )
 
     # tokenizer = AutoTokenizer.from_pretrained(graph.cfg.tokenizer_name)
-    nodes = create_nodes(graph, node_mask, cumulative_scores, to_uci = to_uci)
+    nodes = create_nodes(graph, node_mask, cumulative_scores, node_influence, to_uci = to_uci)
     used_nodes, used_edges = create_used_nodes_and_edges(graph, nodes, edge_mask)
     model = build_model(
         graph=graph,
