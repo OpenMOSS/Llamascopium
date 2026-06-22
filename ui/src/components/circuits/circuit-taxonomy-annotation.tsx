@@ -18,6 +18,7 @@ import { LinkGraphContainer } from "./link-graph-container";
 import { transformCircuitData } from "./link-graph/utils";
 import {
   annotateCircuitTaxonomyFeature,
+  buildCircuitTaxonomyEvidenceExportUrl,
   CircuitTaxonomyCircuitDetail,
   CircuitTaxonomyCircuitSummary,
   CircuitTaxonomyDirectoryOption,
@@ -290,6 +291,8 @@ export const CircuitTaxonomyAnnotation = () => {
   const [loadingCircuitDetail, setLoadingCircuitDetail] = useState(false);
   const [saving, setSaving] = useState(false);
   const [jumpingToPending, setJumpingToPending] = useState(false);
+  const [exportingEvidence, setExportingEvidence] = useState(false);
+  const [exportingDirectoryEvidence, setExportingDirectoryEvidence] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reviewProposals, setReviewProposals] = useState<CircuitTaxonomyReviewProposal[]>([]);
   const [reviewImportText, setReviewImportText] = useState("");
@@ -938,6 +941,79 @@ export const CircuitTaxonomyAnnotation = () => {
     setActiveReviewIndex(0);
   }, []);
 
+const handleExportEvidence = useCallback(async () => {
+    if (!selectedDirectoryId || !selectedCircuitFile) {
+      return;
+    }
+
+    setExportingEvidence(true);
+    setError(null);
+    try {
+      const url = buildCircuitTaxonomyEvidenceExportUrl(selectedDirectoryId, {
+        fileName: selectedCircuitFile,
+        startFeatureIndex: currentFeatureIndex,
+        limit: 100,
+        maxSamples: 6,
+        topSquares: 8,
+        topZ: 12,
+      });
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = "circuit-taxonomy-evidence.jsonl";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Failed to export taxonomy evidence");
+    } finally {
+      setExportingEvidence(false);
+    }
+  }, [currentFeatureIndex, selectedCircuitFile, selectedDirectoryId]);
+
+  const handleExportDirectoryEvidence = useCallback(async () => {
+    if (!selectedDirectoryId) {
+      return;
+    }
+
+    setExportingDirectoryEvidence(true);
+    setError(null);
+    try {
+      const url = buildCircuitTaxonomyEvidenceExportUrl(selectedDirectoryId, {
+        startFeatureIndex: 0,
+        limit: 500,
+        maxSamples: 6,
+        topSquares: 8,
+        topZ: 12,
+      });
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `circuit-taxonomy-evidence-${selectedDirectoryId.replace(/[^a-zA-Z0-9_-]+/g, "_")}.jsonl`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Failed to export directory taxonomy evidence");
+    } finally {
+      setExportingDirectoryEvidence(false);
+    }
+  }, [selectedDirectoryId]);
+
   const directoryLabel = directories.find((item) => item.id === selectedDirectoryId)?.label ?? selectedDirectoryId;
   const featureProgressValue = circuitDetail ? currentFeatureIndex + 1 : 0;
   const featureProgressMax = circuitDetail?.total_features ?? 1;
@@ -968,6 +1044,16 @@ export const CircuitTaxonomyAnnotation = () => {
                 ))}
               </SelectContent>
             </Select>
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleExportDirectoryEvidence()}
+                disabled={!selectedDirectoryId || exportingDirectoryEvidence}
+              >
+                {exportingDirectoryEvidence ? "Exporting Directory..." : "Export Directory Evidence"}
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-col gap-2">
@@ -1088,6 +1174,13 @@ export const CircuitTaxonomyAnnotation = () => {
                       disabled={!circuitDetail || jumpingToPending}
                     >
                       {jumpingToPending ? "Finding Pending..." : "Jump To Pending"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleExportEvidence()}
+                      disabled={!circuitDetail || exportingEvidence}
+                    >
+                      {exportingEvidence ? "Exporting..." : "Export Evidence"}
                     </Button>
                   </div>
 

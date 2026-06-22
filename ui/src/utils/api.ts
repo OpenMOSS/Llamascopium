@@ -381,6 +381,41 @@ export const fetchCircuitTaxonomyResumeTarget = async (
   return response.json();
 };
 
+export const buildCircuitTaxonomyEvidenceExportUrl = (
+  directoryId: string,
+  options: {
+    fileName?: string;
+    startFeatureIndex?: number;
+    limit?: number;
+    maxSamples?: number;
+    topSquares?: number;
+    topZ?: number;
+  } = {},
+): string => {
+  const params = new URLSearchParams();
+  params.set("directory_id", directoryId);
+  if (options.fileName) {
+    params.set("file_name", options.fileName);
+  }
+  if (options.startFeatureIndex !== undefined) {
+    params.set("start_feature_index", String(options.startFeatureIndex));
+  }
+  if (options.limit !== undefined) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.maxSamples !== undefined) {
+    params.set("max_samples", String(options.maxSamples));
+  }
+  if (options.topSquares !== undefined) {
+    params.set("top_squares", String(options.topSquares));
+  }
+  if (options.topZ !== undefined) {
+    params.set("top_z", String(options.topZ));
+  }
+
+  return `${API_BASE}/circuit_taxonomy/export_evidence?${params.toString()}`;
+};
+
 export const annotateCircuitTaxonomyFeature = async (
   dictionaryName: string,
   featureIndex: number,

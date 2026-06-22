@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - exercised in environments missing deps
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_NAME = "annotate-circuit-taxonomy"
 SKILL_RUBRIC_PATH = Path.home() / ".codex" / "skills" / SKILL_NAME / "references" / "taxonomy-rubric.md"
-DEFAULT_BASE_URL = os.environ.get("VITE_BACKEND_URL") or os.environ.get("BACKEND_URL") or "http://127.0.0.1:24577"
+DEFAULT_BASE_URL = os.environ.get("VITE_BACKEND_URL") or os.environ.get("BACKEND_URL") or "http://127.0.0.1:3000"
 TAXONOMY_LABELS = {
     "Det",
     "Src",
@@ -381,6 +381,40 @@ def extract_evidence(args: argparse.Namespace) -> list[dict[str, Any]]:
     return evidence
 
 
+def export_evidence_from_backend(args: argparse.Namespace) -> list[dict[str, Any]]:
+    params: dict[str, Any] = {
+        "limit": args.limit,
+        "max_samples": args.max_samples,
+        "top_squares": args.top_squares,
+        "top_z": args.top_z,
+        "start_feature_index": args.start_feature_index,
+    }
+    if args.directory_id:
+        params["directory_id"] = args.directory_id
+    else:
+        params["directory_id"] = resolve_directory(args.base_url, None)
+    if args.file_name:
+        params["file_name"] = args.file_name
+
+    response = requests.get(
+        f"{args.base_url.rstrip('/')}/circuit_taxonomy/export_evidence",
+        params=params,
+        timeout=600,
+    )
+    response.raise_for_status()
+
+    items: list[dict[str, Any]] = []
+    for line_no, line in enumerate(response.text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        item = json.loads(stripped)
+        if not isinstance(item, dict):
+            raise ValueError(f"Export line {line_no} is not a JSON object")
+        items.append(item)
+    return items
+
+
 def write_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
@@ -498,7 +532,7 @@ def label_with_codex(args: argparse.Namespace, evidence_items: list[dict[str, An
 
 
 def command_extract(args: argparse.Namespace) -> int:
-    evidence = extract_evidence(args)
+    evidence = export_evidence_from_backend(args)
     write_jsonl(args.output, evidence)
     print(f"Wrote {len(evidence)} evidence items to {args.output}")
     return 0
@@ -524,7 +558,7 @@ def command_label(args: argparse.Namespace) -> int:
 
 
 def command_run(args: argparse.Namespace) -> int:
-    evidence = extract_evidence(args)
+    evidence = export_evidence_from_backend(args)
     write_jsonl(args.evidence_output, evidence)
     print(f"Wrote {len(evidence)} evidence items to {args.evidence_output}")
     if args.no_label:
