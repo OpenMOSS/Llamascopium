@@ -303,6 +303,14 @@ export interface CircuitTaxonomyAnnotateResponse {
   interpretation?: Record<string, unknown> | null;
 }
 
+export interface CircuitTaxonomySaveDirectoryEvidenceResponse {
+  status: "saved";
+  directory_id: string;
+  path: string;
+  relative_path: string;
+  item_count: number;
+}
+
 export const fetchCircuitTaxonomyDirectories = async (): Promise<{
   directories: CircuitTaxonomyDirectoryOption[];
   taxonomy_labels: string[];
@@ -414,6 +422,35 @@ export const buildCircuitTaxonomyEvidenceExportUrl = (
   }
 
   return `${API_BASE}/circuit_taxonomy/export_evidence?${params.toString()}`;
+};
+
+export const saveCircuitTaxonomyDirectoryEvidence = async (
+  directoryId: string,
+  options: {
+    limit?: number;
+    maxSamples?: number;
+    topSquares?: number;
+    topZ?: number;
+  } = {},
+): Promise<CircuitTaxonomySaveDirectoryEvidenceResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/save_directory_evidence`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      directory_id: directoryId,
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+      max_samples: options.maxSamples ?? 6,
+      top_squares: options.topSquares ?? 8,
+      top_z: options.topZ ?? 12,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
 };
 
 export const annotateCircuitTaxonomyFeature = async (

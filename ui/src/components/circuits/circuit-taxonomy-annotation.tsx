@@ -28,6 +28,7 @@ import {
   fetchCircuitTaxonomyDirectories,
   fetchCircuitTaxonomyResumeTarget,
   fetchFeatureByDictionaryName,
+  saveCircuitTaxonomyDirectoryEvidence,
 } from "@/utils/api";
 import { normalizeZPattern } from "@/utils/activationUtils";
 import { extractFenFromText, validateFen } from "@/utils/fenUtils";
@@ -293,6 +294,8 @@ export const CircuitTaxonomyAnnotation = () => {
   const [jumpingToPending, setJumpingToPending] = useState(false);
   const [exportingEvidence, setExportingEvidence] = useState(false);
   const [exportingDirectoryEvidence, setExportingDirectoryEvidence] = useState(false);
+  const [savingDirectoryEvidence, setSavingDirectoryEvidence] = useState(false);
+  const [savedDirectoryEvidencePath, setSavedDirectoryEvidencePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviewProposals, setReviewProposals] = useState<CircuitTaxonomyReviewProposal[]>([]);
   const [reviewImportText, setReviewImportText] = useState("");
@@ -1014,6 +1017,28 @@ const handleExportEvidence = useCallback(async () => {
     }
   }, [selectedDirectoryId]);
 
+  const handleSaveDirectoryEvidence = useCallback(async () => {
+    if (!selectedDirectoryId) {
+      return;
+    }
+
+    setSavingDirectoryEvidence(true);
+    setSavedDirectoryEvidencePath(null);
+    setError(null);
+    try {
+      const response = await saveCircuitTaxonomyDirectoryEvidence(selectedDirectoryId, {
+        maxSamples: 6,
+        topSquares: 8,
+        topZ: 12,
+      });
+      setSavedDirectoryEvidencePath(`${response.relative_path} (${response.item_count} items)`);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save directory taxonomy evidence");
+    } finally {
+      setSavingDirectoryEvidence(false);
+    }
+  }, [selectedDirectoryId]);
+
   const directoryLabel = directories.find((item) => item.id === selectedDirectoryId)?.label ?? selectedDirectoryId;
   const featureProgressValue = circuitDetail ? currentFeatureIndex + 1 : 0;
   const featureProgressMax = circuitDetail?.total_features ?? 1;
@@ -1045,14 +1070,29 @@ const handleExportEvidence = useCallback(async () => {
               </SelectContent>
             </Select>
             <div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void handleExportDirectoryEvidence()}
-                disabled={!selectedDirectoryId || exportingDirectoryEvidence}
-              >
-                {exportingDirectoryEvidence ? "Exporting Directory..." : "Export Directory Evidence"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleExportDirectoryEvidence()}
+                  disabled={!selectedDirectoryId || exportingDirectoryEvidence}
+                >
+                  {exportingDirectoryEvidence ? "Exporting Directory..." : "Export Directory Evidence"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleSaveDirectoryEvidence()}
+                  disabled={!selectedDirectoryId || savingDirectoryEvidence}
+                >
+                  {savingDirectoryEvidence ? "Saving All..." : "Save All Directory Taxonomy Evidence"}
+                </Button>
+              </div>
+              {savedDirectoryEvidencePath && (
+                <div className="mt-2 break-all text-xs text-muted-foreground">
+                  Saved to {savedDirectoryEvidencePath}
+                </div>
+              )}
             </div>
           </div>
 
