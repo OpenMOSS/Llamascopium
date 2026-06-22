@@ -5,6 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { AppPagination } from "@/components/ui/pagination";
 import { ChessBoard } from "@/components/chess/chess-board";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -31,6 +33,7 @@ import { extractFenFromText, validateFen } from "@/utils/fenUtils";
 
 const TAXONOMY_PREFIX_RE = /^\[(Det|Src|Tgt|Val|Reg|Cap|Pro|Mov|Tac|Spa|Uninterpretable)\]\s*/;
 const TAXONOMY_TOP_ACTIVATION_PAGE_SIZE = 6;
+const TAXONOMY_REVIEW_STORAGE_KEY = "circuit-taxonomy-review-proposals";
 
 const getFeatureCacheKey = (featureRef: CircuitTaxonomyFeatureRef) =>
   `${featureRef.dictionary_name}:${featureRef.feature_index}`;
@@ -50,6 +53,99 @@ type ChessTopActivationSample = {
   zPatternIndices?: number[][];
   zPatternValues?: number[];
   sampleIndex: number;
+};
+
+type CircuitTaxonomyReviewStatus = "pending" | "approved" | "rejected" | "error";
+
+type CircuitTaxonomyReviewProposal = {
+  id: string;
+  directoryId?: string;
+  fileName?: string;
+  circuitIndex?: number | null;
+  featureIndexInCircuit?: number | null;
+  dictionaryName: string;
+  featureIndex: number;
+  layer?: number | null;
+  featureType?: string | null;
+  nodeId?: string | null;
+  taxonomy: string;
+  confidence?: number | null;
+  rationale?: string;
+  evidenceSummary?: string;
+  status?: CircuitTaxonomyReviewStatus;
+  error?: string;
+};
+
+const normalizeReviewProposal = (raw: unknown, index: number): CircuitTaxonomyReviewProposal | null => {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const item = raw as Record<string, unknown>;
+  const dictionaryName = String(item.dictionaryName ?? item.dictionary_name ?? "").trim();
+  const rawFeatureIndex = item.featureIndex ?? item.feature_index;
+  const featureIndex = typeof rawFeatureIndex === "number" ? rawFeatureIndex : Number(rawFeatureIndex);
+  const taxonomy = String(item.taxonomy ?? item.label ?? "").replace(/^\[|\]$/g, "").trim();
+
+  if (!dictionaryName || !Number.isFinite(featureIndex) || !taxonomy) {
+    return null;
+  }
+
+  const id = String(item.id ?? `${dictionaryName}:${featureIndex}:${taxonomy}:${index}`);
+  const rawFeatureIndexInCircuit = item.featureIndexInCircuit ?? item.feature_index_in_circuit;
+  const featureIndexInCircuit =
+    rawFeatureIndexInCircuit === undefined || rawFeatureIndexInCircuit === null
+      ? null
+      : Number(rawFeatureIndexInCircuit);
+
+  return {
+    id,
+    directoryId: item.directoryId ? String(item.directoryId) : item.directory_id ? String(item.directory_id) : undefined,
+    fileName: item.fileName ? String(item.fileName) : item.file_name ? String(item.file_name) : undefined,
+    circuitIndex:
+      item.circuitIndex === undefined && item.circuit_index === undefined
+        ? null
+        : Number(item.circuitIndex ?? item.circuit_index),
+    featureIndexInCircuit: Number.isFinite(featureIndexInCircuit) ? featureIndexInCircuit : null,
+    dictionaryName,
+    featureIndex,
+    layer: item.layer === undefined || item.layer === null ? null : Number(item.layer),
+    featureType: item.featureType ? String(item.featureType) : item.feature_type ? String(item.feature_type) : null,
+    nodeId: item.nodeId ? String(item.nodeId) : item.node_id ? String(item.node_id) : null,
+    taxonomy,
+    confidence:
+      item.confidence === undefined || item.confidence === null ? null : Number(item.confidence),
+    rationale: item.rationale ? String(item.rationale) : "",
+    evidenceSummary: item.evidenceSummary ? String(item.evidenceSummary) : item.evidence_summary ? String(item.evidence_summary) : "",
+    status:
+      item.status === "approved" || item.status === "rejected" || item.status === "error"
+        ? item.status
+        : "pending",
+    error: item.error ? String(item.error) : undefined,
+  };
+};
+
+const parseReviewProposals = (rawText: string): CircuitTaxonomyReviewProposal[] => {
+  const trimmed = rawText.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  let rawItems: unknown[];
+  try {
+    const parsed = JSON.parse(trimmed);
+    rawItems = Array.isArray(parsed) ? parsed : [parsed];
+  } catch {
+    rawItems = trimmed
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
+
+  return rawItems
+    .map((item, index) => normalizeReviewProposal(item, index))
+    .filter((item): item is CircuitTaxonomyReviewProposal => item !== null);
 };
 
 const extractChessTopActivationSamples = (
@@ -195,10 +291,39 @@ export const CircuitTaxonomyAnnotation = () => {
   const [saving, setSaving] = useState(false);
   const [jumpingToPending, setJumpingToPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reviewProposals, setReviewProposals] = useState<CircuitTaxonomyReviewProposal[]>([]);
+  const [reviewImportText, setReviewImportText] = useState("");
+  const [activeReviewIndex, setActiveReviewIndex] = useState(0);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
   const pendingFeatureLoads = useRef<Map<string, Promise<Feature | null>>>(new Map());
   const pendingResumeFeatureIndexRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(TAXONOMY_REVIEW_STORAGE_KEY);
+    if (!stored) {
+      return;
+    }
+
+    try {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) {
+        setReviewProposals(
+          parsed
+            .map((item, index) => normalizeReviewProposal(item, index))
+            .filter((item): item is CircuitTaxonomyReviewProposal => item !== null),
+        );
+      }
+    } catch {
+      window.localStorage.removeItem(TAXONOMY_REVIEW_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(TAXONOMY_REVIEW_STORAGE_KEY, JSON.stringify(reviewProposals));
+  }, [reviewProposals]);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,6 +408,16 @@ export const CircuitTaxonomyAnnotation = () => {
   }, [selectedDirectoryId]);
 
   const currentFeatureRef = useMemo(() => circuitDetail?.features[currentFeatureIndex] ?? null, [circuitDetail, currentFeatureIndex]);
+  const activeReviewProposal = reviewProposals[activeReviewIndex] ?? null;
+  const reviewCounts = useMemo(
+    () => ({
+      pending: reviewProposals.filter((item) => (item.status ?? "pending") === "pending").length,
+      approved: reviewProposals.filter((item) => item.status === "approved").length,
+      rejected: reviewProposals.filter((item) => item.status === "rejected").length,
+      error: reviewProposals.filter((item) => item.status === "error").length,
+    }),
+    [reviewProposals],
+  );
 
   const storeFeatureInCache = useCallback(
     (
@@ -583,6 +718,226 @@ export const CircuitTaxonomyAnnotation = () => {
     }
   }, [currentFeatureRef, goToNextFeature, refreshFeature, selectedTaxonomy]);
 
+  const updateReviewProposal = useCallback(
+    (proposalId: string, update: Partial<CircuitTaxonomyReviewProposal>) => {
+      setReviewProposals((prev) =>
+        prev.map((proposal) => (proposal.id === proposalId ? { ...proposal, ...update } : proposal)),
+      );
+    },
+    [],
+  );
+
+  const moveToNextPendingReview = useCallback(
+    (fromIndex: number) => {
+      const nextIndex = reviewProposals.findIndex(
+        (proposal, index) => index > fromIndex && (proposal.status ?? "pending") === "pending",
+      );
+      if (nextIndex >= 0) {
+        setActiveReviewIndex(nextIndex);
+      }
+    },
+    [reviewProposals],
+  );
+
+  const handleImportReviewProposals = useCallback(() => {
+    setReviewError(null);
+    try {
+      const parsed = parseReviewProposals(reviewImportText);
+      if (parsed.length === 0) {
+        setReviewError("No valid proposals were found.");
+        return;
+      }
+
+      setReviewProposals((prev) => {
+        const seen = new Set(prev.map((proposal) => proposal.id));
+        const next = [...prev];
+        for (const proposal of parsed) {
+          if (!seen.has(proposal.id)) {
+            next.push(proposal);
+            seen.add(proposal.id);
+          }
+        }
+        return next;
+      });
+      setActiveReviewIndex((prev) => (reviewProposals.length === 0 ? 0 : prev));
+      setReviewImportText("");
+    } catch (importError) {
+      setReviewError(importError instanceof Error ? importError.message : "Failed to parse review proposals.");
+    }
+  }, [reviewImportText, reviewProposals.length]);
+
+  const handleAddCurrentFeatureToReview = useCallback(() => {
+    if (!currentFeatureRef || !circuitDetail) {
+      return;
+    }
+
+    const proposal: CircuitTaxonomyReviewProposal = {
+      id: `${currentFeatureRef.dictionary_name}:${currentFeatureRef.feature_index}:manual`,
+      directoryId: selectedDirectoryId,
+      fileName: selectedCircuitFile,
+      circuitIndex: circuitDetail.circuit_index,
+      featureIndexInCircuit: currentFeatureIndex,
+      dictionaryName: currentFeatureRef.dictionary_name,
+      featureIndex: currentFeatureRef.feature_index,
+      layer: currentFeatureRef.layer,
+      featureType: currentFeatureRef.feature_type,
+      nodeId: currentFeatureRef.node_id,
+      taxonomy: selectedTaxonomy || extractTaxonomyPrefix(currentFeature?.interpretation?.text) || "Uninterpretable",
+      confidence: null,
+      rationale: "Manual review item created from the current feature.",
+      evidenceSummary: currentFeature?.interpretation?.text || "",
+      status: "pending",
+    };
+
+    setReviewProposals((prev) => {
+      if (prev.some((item) => item.id === proposal.id)) {
+        return prev;
+      }
+      return [...prev, proposal];
+    });
+    setActiveReviewIndex(reviewProposals.length);
+  }, [
+    circuitDetail,
+    currentFeature,
+    currentFeatureIndex,
+    currentFeatureRef,
+    reviewProposals.length,
+    selectedCircuitFile,
+    selectedDirectoryId,
+    selectedTaxonomy,
+  ]);
+
+  const handleSelectReviewProposal = useCallback(
+    async (proposal: CircuitTaxonomyReviewProposal, index: number) => {
+      setActiveReviewIndex(index);
+      setReviewError(null);
+
+      try {
+        if (proposal.directoryId && proposal.directoryId !== selectedDirectoryId) {
+          setSelectedDirectoryId(proposal.directoryId);
+        }
+
+        if (proposal.directoryId && proposal.fileName) {
+          const detail = await fetchCircuitTaxonomyCircuit(proposal.directoryId, proposal.fileName);
+          const matchedIndex =
+            proposal.featureIndexInCircuit !== null && proposal.featureIndexInCircuit !== undefined
+              ? proposal.featureIndexInCircuit
+              : detail.features.findIndex(
+                  (feature) =>
+                    feature.dictionary_name === proposal.dictionaryName &&
+                    feature.feature_index === proposal.featureIndex,
+                );
+
+          if (matchedIndex < 0 || !detail.features[matchedIndex]) {
+            throw new Error("The proposal feature was not found in its circuit file.");
+          }
+
+          const featureRef = detail.features[matchedIndex];
+          await ensureFeatureLoaded(featureRef);
+          setSelectedCircuitFile(proposal.fileName);
+          setCircuitDetail(detail);
+          setCurrentFeatureIndex(matchedIndex);
+          setClickedId(featureRef.node_id ?? null);
+          setSelectedTaxonomy(proposal.taxonomy);
+          return;
+        }
+
+        if (circuitDetail) {
+          const matchedIndex = circuitDetail.features.findIndex(
+            (feature) =>
+              feature.dictionary_name === proposal.dictionaryName &&
+              feature.feature_index === proposal.featureIndex,
+          );
+          if (matchedIndex >= 0) {
+            const featureRef = circuitDetail.features[matchedIndex];
+            await ensureFeatureLoaded(featureRef);
+            setCurrentFeatureIndex(matchedIndex);
+            setClickedId(featureRef.node_id ?? null);
+            setSelectedTaxonomy(proposal.taxonomy);
+            return;
+          }
+        }
+
+        throw new Error("This proposal needs directoryId and fileName to jump from another circuit.");
+      } catch (selectError) {
+        const message = selectError instanceof Error ? selectError.message : "Failed to select review proposal.";
+        setReviewError(message);
+        updateReviewProposal(proposal.id, { status: "error", error: message });
+      }
+    },
+    [circuitDetail, ensureFeatureLoaded, selectedDirectoryId, updateReviewProposal],
+  );
+
+  const handleApproveReviewProposal = useCallback(async () => {
+    if (!activeReviewProposal) {
+      return;
+    }
+
+    setReviewSaving(true);
+    setReviewError(null);
+    try {
+      let response = await annotateCircuitTaxonomyFeature(
+        activeReviewProposal.dictionaryName,
+        activeReviewProposal.featureIndex,
+        activeReviewProposal.taxonomy,
+      );
+
+      if (response.status === "conflict") {
+        const confirmed = window.confirm(
+          `Current interpretation starts with [${response.existing_taxonomy}]. Replace it with [${activeReviewProposal.taxonomy}]?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+        response = await annotateCircuitTaxonomyFeature(
+          activeReviewProposal.dictionaryName,
+          activeReviewProposal.featureIndex,
+          activeReviewProposal.taxonomy,
+          true,
+        );
+      }
+
+      if (
+        currentFeatureRef?.dictionary_name === activeReviewProposal.dictionaryName &&
+        currentFeatureRef?.feature_index === activeReviewProposal.featureIndex
+      ) {
+        await refreshFeature(currentFeatureRef);
+      }
+
+      updateReviewProposal(activeReviewProposal.id, {
+        status: "approved",
+        error: undefined,
+      });
+      moveToNextPendingReview(activeReviewIndex);
+    } catch (approveError) {
+      const message = approveError instanceof Error ? approveError.message : "Failed to approve proposal.";
+      setReviewError(message);
+      updateReviewProposal(activeReviewProposal.id, { status: "error", error: message });
+    } finally {
+      setReviewSaving(false);
+    }
+  }, [
+    activeReviewIndex,
+    activeReviewProposal,
+    currentFeatureRef,
+    moveToNextPendingReview,
+    refreshFeature,
+    updateReviewProposal,
+  ]);
+
+  const handleRejectReviewProposal = useCallback(() => {
+    if (!activeReviewProposal) {
+      return;
+    }
+    updateReviewProposal(activeReviewProposal.id, { status: "rejected", error: undefined });
+    moveToNextPendingReview(activeReviewIndex);
+  }, [activeReviewIndex, activeReviewProposal, moveToNextPendingReview, updateReviewProposal]);
+
+  const handleClearCompletedReviewProposals = useCallback(() => {
+    setReviewProposals((prev) => prev.filter((proposal) => (proposal.status ?? "pending") === "pending"));
+    setActiveReviewIndex(0);
+  }, []);
+
   const directoryLabel = directories.find((item) => item.id === selectedDirectoryId)?.label ?? selectedDirectoryId;
   const featureProgressValue = circuitDetail ? currentFeatureIndex + 1 : 0;
   const featureProgressMax = circuitDetail?.total_features ?? 1;
@@ -791,6 +1146,186 @@ export const CircuitTaxonomyAnnotation = () => {
           </Card>
         </div>
       </div>
+
+      <Tabs defaultValue="review" className="w-full">
+        <TabsList>
+          <TabsTrigger value="review">
+            LLM Review Queue ({reviewCounts.pending} pending)
+          </TabsTrigger>
+          <TabsTrigger value="import">Import Proposals</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="review" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>LLM Taxonomy Review</CardTitle>
+              <CardDescription>
+                Review candidate labels before committing them to MongoDB interpretations.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                  <span>Pending: {reviewCounts.pending}</span>
+                  <span>Approved: {reviewCounts.approved}</span>
+                  <span>Rejected: {reviewCounts.rejected}</span>
+                  <span>Errors: {reviewCounts.error}</span>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={handleAddCurrentFeatureToReview}
+                    disabled={!currentFeatureRef}
+                  >
+                    Add Current Feature
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleClearCompletedReviewProposals}
+                    disabled={reviewProposals.length === 0}
+                  >
+                    Clear Completed
+                  </Button>
+                </div>
+
+                {reviewError && (
+                  <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+                    {reviewError}
+                  </div>
+                )}
+
+                <div className="max-h-[520px] overflow-y-auto rounded-md border">
+                  {reviewProposals.length === 0 ? (
+                    <div className="p-4 text-sm text-muted-foreground">
+                      No LLM proposals loaded yet. Import JSON or JSONL proposals to start reviewing.
+                    </div>
+                  ) : (
+                    reviewProposals.map((proposal, index) => (
+                      <button
+                        key={proposal.id}
+                        type="button"
+                        className={`block w-full border-b p-3 text-left text-sm last:border-b-0 ${
+                          index === activeReviewIndex ? "bg-slate-100" : "bg-background"
+                        }`}
+                        onClick={() => void handleSelectReviewProposal(proposal, index)}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium">
+                            [{proposal.taxonomy}] {proposal.dictionaryName} #{proposal.featureIndex}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {proposal.status ?? "pending"}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {proposal.fileName ?? "current circuit"}{" "}
+                          {proposal.confidence !== null && proposal.confidence !== undefined
+                            ? `| confidence ${proposal.confidence.toFixed(2)}`
+                            : ""}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4">
+                {activeReviewProposal ? (
+                  <>
+                    <div className="grid gap-2 text-sm">
+                      <div className="text-lg font-semibold">
+                        [{activeReviewProposal.taxonomy}] {activeReviewProposal.dictionaryName} #
+                        {activeReviewProposal.featureIndex}
+                      </div>
+                      <div className="text-muted-foreground">
+                        {activeReviewProposal.fileName ?? "No circuit file recorded"}
+                      </div>
+                      <div>
+                        <span className="font-medium">Status:</span>{" "}
+                        {activeReviewProposal.status ?? "pending"}
+                      </div>
+                      <div>
+                        <span className="font-medium">Confidence:</span>{" "}
+                        {activeReviewProposal.confidence !== null &&
+                        activeReviewProposal.confidence !== undefined
+                          ? activeReviewProposal.confidence.toFixed(2)
+                          : "-"}
+                      </div>
+                      <div>
+                        <span className="font-medium">Layer / Type:</span>{" "}
+                        {activeReviewProposal.layer ?? "-"} / {activeReviewProposal.featureType ?? "-"}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">Rationale</div>
+                      <div className="min-h-[96px] whitespace-pre-wrap rounded-md border bg-slate-50 p-3 text-sm">
+                        {activeReviewProposal.rationale || "No rationale provided."}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">Evidence Summary</div>
+                      <div className="min-h-[132px] whitespace-pre-wrap rounded-md border bg-slate-50 p-3 text-sm">
+                        {activeReviewProposal.evidenceSummary || "No evidence summary provided."}
+                      </div>
+                    </div>
+
+                    {activeReviewProposal.error && (
+                      <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+                        {activeReviewProposal.error}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleSelectReviewProposal(activeReviewProposal, activeReviewIndex)}
+                      >
+                        Jump To Feature
+                      </Button>
+                      <Button onClick={handleApproveReviewProposal} disabled={reviewSaving}>
+                        {reviewSaving ? "Approving..." : "Approve And Save"}
+                      </Button>
+                      <Button variant="outline" onClick={handleRejectReviewProposal} disabled={reviewSaving}>
+                        Reject
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-sm text-muted-foreground">Select a proposal to review.</div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="import" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Import LLM Proposals</CardTitle>
+              <CardDescription>
+                Paste a JSON array or JSONL. Required fields are dictionary_name, feature_index, and taxonomy.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <Textarea
+                value={reviewImportText}
+                onChange={(event) => setReviewImportText(event.target.value)}
+                placeholder='{"dictionary_name":"BT4_lorsa_L0A_k30_e16","feature_index":123,"taxonomy":"Src","confidence":0.82,"rationale":"...","evidence_summary":"..."}'
+                className="min-h-[220px] font-mono text-sm"
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleImportReviewProposals}>Import</Button>
+                <Button variant="outline" onClick={() => setReviewImportText("")}>
+                  Clear
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

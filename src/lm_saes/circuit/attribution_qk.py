@@ -3444,12 +3444,17 @@ def merge_qk_graph(attribution_result):
     for gid, vec in acc_k.items():
         acc[gid] = acc.get(gid, torch.zeros_like(vec)) + vec
 
-    # Row order: Take the first K rows of the union selected_union in order of appearance (or all)
-    # Here we directly take the existing gid rows in the order of selected_union
+    # Row order must match selected_union exactly: row i and column i both
+    # correspond to selected_union[i]. If a selected feature has no row on
+    # either Q or K, keep a zero row so later node ranges do not shift.
     merged_feature_rows = []
+    zero_feature_row = torch.zeros(
+        col_read_merged.numel(),
+        dtype=em_q_full.dtype,
+        device=em_q_full.device,
+    )
     for gid in selected_union.tolist():
-        if gid in acc:
-            merged_feature_rows.append(acc[gid])
+        merged_feature_rows.append(acc.get(gid, zero_feature_row.clone()))
     if len(merged_feature_rows) > 0:
         merged_feature_block = torch.stack(merged_feature_rows, dim=0)
     else:
@@ -3463,7 +3468,13 @@ def merge_qk_graph(attribution_result):
     # Assemble the final square matrix (number of nodes = number of columns)
     final_node_count = col_read_merged.numel()
     full_edge_matrix_merged = torch.zeros(final_node_count, final_node_count, dtype=merged_feature_block.dtype)
-    # Top: feature rows (can be less than the size of selected_union, depending on whether there are rows)
+    if merged_feature_block.shape[0] != selected_union.numel():
+        raise RuntimeError(
+            "QK merge row/column alignment failed: "
+            f"{merged_feature_block.shape[0]} feature rows for "
+            f"{selected_union.numel()} selected feature columns."
+        )
+    # Top: feature rows in the same order as selected_union
     if merged_feature_block.shape[0] > 0:
         full_edge_matrix_merged[: merged_feature_block.shape[0]] = merged_feature_block
     # Bottom: logit rows

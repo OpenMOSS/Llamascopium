@@ -693,11 +693,11 @@ def create_graph_json_data(
     print(f'{target_move = }') 
     print(f'{graph.adjacency_matrix.shape = }')
     
-    node_mask, edge_mask, cumulative_scores = (
+    node_mask, edge_mask, cumulative_scores, node_influence = (
         el.to(device) for el in prune_graph(graph, node_threshold, edge_threshold)
     )
 
-    nodes = create_nodes(graph, node_mask, cumulative_scores, to_uci = to_uci)
+    nodes = create_nodes(graph, node_mask, cumulative_scores, node_influence, to_uci = to_uci)
     used_nodes, used_edges = create_used_nodes_and_edges(graph, nodes, edge_mask)
     model = build_model(
         graph=graph,
@@ -733,7 +733,7 @@ def run_circuit_trace(
     max_feature_nodes: int = DEFAULT_MAX_FEATURE_NODES,
     batch_size: int = 1,
     order_mode: str = "abs",
-    mongo_uri: str = "mongodb://10.246.78.161:27017",
+    mongo_uri: str = "mongodb://10.244.81.97:27017",
     mongo_db: str = "mechinterp",
     sae_series: str = "BT4-exp128",
     act_times_max: Optional[int] = None,
@@ -937,7 +937,7 @@ def main():
                        choices=["positive", "negative", "move_pair", "group"],
                        help="Sorting mode")
     
-    parser.add_argument("--mongo_uri", type=str, default="mongodb://10.246.78.161:27017",
+    parser.add_argument("--mongo_uri", type=str, default="mongodb://10.244.81.97:27017",
                        help="MongoDB URI")
     parser.add_argument("--mongo_db", type=str, default="mechinterp",
                        help="MongoDB database name")
