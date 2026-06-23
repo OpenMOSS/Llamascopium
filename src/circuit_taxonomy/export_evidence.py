@@ -348,41 +348,54 @@ class EvidenceExporter:
                     summary["wdl_value"] = float(wdl[0] - wdl[2])
                     summary["value"] = summary["wdl_value"]
 
-            try:
-                from src.chess_utils import get_move_from_policy_output_with_prob
-            except Exception:
-                get_move_from_policy_output_with_prob = None
+            from src.lm_saes.circuit.leela_board import LeelaBoard
+            import chess
 
-            if get_move_from_policy_output_with_prob is None:
-                summary["top_moves"] = []
-            else:
-                policy_output = output[0] if isinstance(output, (list, tuple)) else output
-                if policy_output.dim() == 3:
-                    policy_output = policy_output[:, -1, :]
-                elif policy_output.dim() == 1:
-                    policy_output = policy_output.unsqueeze(0)
+            policy_output = output[0] if isinstance(output, (list, tuple)) else output
+            if policy_output.dim() == 3:
+                policy_output = policy_output[:, -1, :]
+            if policy_output.dim() == 2:
+                policy_output = policy_output[0]
+            elif policy_output.dim() != 1:
+                raise RuntimeError(f"Unexpected policy output shape: {tuple(policy_output.shape)}")
 
-                all_legal_moves = get_move_from_policy_output_with_prob(policy_output, fen, return_list=True)
-                if not isinstance(all_legal_moves, list):
-                    all_legal_moves = []
-
-                uci2idx_fn = None
+            policy_output = policy_output.detach().cpu()
+            leela_board = LeelaBoard.from_fen(fen, history_synthesis=True)
+            legal_entries: list[tuple[str, int, float]] = []
+            for move in chess.Board(fen).legal_moves:
+                uci = move.uci()
                 try:
-                    from leela_interp import LeelaBoard as _LeelaBoard  # type: ignore
+                    idx = int(leela_board.uci2idx(uci))
+                except (KeyError, IndexError, ValueError):
+                    if len(uci) == 5 and uci[4] in "qrbn":
+                        try:
+                            idx = int(leela_board.uci2idx(uci[:4]))
+                        except (KeyError, IndexError, ValueError):
+                            continue
+                    else:
+                        continue
+                if 0 <= idx < int(policy_output.numel()):
+                    legal_entries.append((uci, idx, float(policy_output[idx].item())))
 
-                    uci2idx_fn = _LeelaBoard.from_fen(fen, history_synthesis=True).uci2idx
-                except Exception:
-                    uci2idx_fn = None
-
-                summary["top_moves"] = [
-                    {
-                        "uci": uci,
-                        "logit": round(float(score), 6),
-                        "prob": round(float(prob), 6),
-                        "idx": int(uci2idx_fn(uci)) if uci2idx_fn is not None else None,
-                    }
-                    for uci, score, prob in all_legal_moves[:5]
-                ]
+            if legal_entries:
+                legal_logits = torch.tensor([entry[2] for entry in legal_entries], dtype=torch.float32)
+                legal_probs = torch.softmax(legal_logits - legal_logits.max(), dim=0).tolist()
+                ranked = sorted(
+                    (
+                        {
+                            "uci": uci,
+                            "logit": round(logit, 6),
+                            "prob": round(float(prob), 6),
+                            "idx": idx,
+                        }
+                        for (uci, idx, logit), prob in zip(legal_entries, legal_probs)
+                    ),
+                    key=lambda item: item["logit"],
+                    reverse=True,
+                )
+                summary["top_moves"] = ranked[:5]
+            else:
+                summary["top_moves"] = []
 
         except Exception as error:
             summary = {
