@@ -24,6 +24,7 @@ if str(SRC_ROOT) not in sys.path:
 from lm_saes.config import MongoDBConfig  # noqa: E402
 from lm_saes.database import MongoClient  # noqa: E402
 from lm_saes.resource_loaders import load_dataset_shard  # noqa: E402
+from chess_utils import get_move_from_model  # noqa: E402
 
 
 TAXONOMY_LABELS = [
@@ -348,52 +349,19 @@ class EvidenceExporter:
                     summary["wdl_value"] = float(wdl[0] - wdl[2])
                     summary["value"] = summary["wdl_value"]
 
-            from src.lm_saes.circuit.leela_board import LeelaBoard
-            import chess
-
-            policy_output = output[0] if isinstance(output, (list, tuple)) else output
-            if policy_output.dim() == 3:
-                policy_output = policy_output[:, -1, :]
-            if policy_output.dim() == 2:
-                policy_output = policy_output[0]
-            elif policy_output.dim() != 1:
-                raise RuntimeError(f"Unexpected policy output shape: {tuple(policy_output.shape)}")
-
-            policy_output = policy_output.detach().cpu()
-            leela_board = LeelaBoard.from_fen(fen, history_synthesis=True)
-            legal_entries: list[tuple[str, int, float]] = []
-            for move in chess.Board(fen).legal_moves:
-                uci = move.uci()
-                try:
-                    idx = int(leela_board.uci2idx(uci))
-                except (KeyError, IndexError, ValueError):
-                    if len(uci) == 5 and uci[4] in "qrbn":
-                        try:
-                            idx = int(leela_board.uci2idx(uci[:4]))
-                        except (KeyError, IndexError, ValueError):
-                            continue
-                    else:
-                        continue
-                if 0 <= idx < int(policy_output.numel()):
-                    legal_entries.append((uci, idx, float(policy_output[idx].item())))
-
-            if legal_entries:
-                legal_logits = torch.tensor([entry[2] for entry in legal_entries], dtype=torch.float32)
+            legal_moves = get_move_from_model(model, fen, return_list=True)
+            if isinstance(legal_moves, list) and legal_moves:
+                legal_logits = torch.tensor([entry[1] for entry in legal_moves], dtype=torch.float32)
                 legal_probs = torch.softmax(legal_logits - legal_logits.max(), dim=0).tolist()
-                ranked = sorted(
-                    (
-                        {
-                            "uci": uci,
-                            "logit": round(logit, 6),
-                            "prob": round(float(prob), 6),
-                            "idx": idx,
-                        }
-                        for (uci, idx, logit), prob in zip(legal_entries, legal_probs)
-                    ),
-                    key=lambda item: item["logit"],
-                    reverse=True,
-                )
-                summary["top_moves"] = ranked[:5]
+                summary["top_moves"] = [
+                    {
+                        "uci": uci,
+                        "logit": round(logit, 6),
+                        "prob": round(float(prob), 6),
+                        "idx": None,
+                    }
+                    for (uci, logit), prob in zip(legal_moves[:5], legal_probs[:5])
+                ]
             else:
                 summary["top_moves"] = []
 
