@@ -226,3 +226,9 @@ restore_meta.py
 # Local circuits 
 /circuits_local
 /interaction_circuit
+
+# Circuit taxonomy local artifacts
+/outputs/circuit_taxonomy/
+/scripts/circuit_taxonomy/
+!/scripts/circuit_taxonomy/README.md
+!/scripts/circuit_taxonomy/taxonomy_runner.py

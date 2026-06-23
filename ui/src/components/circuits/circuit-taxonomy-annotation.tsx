@@ -31,7 +31,6 @@ import {
   fetchCircuitTaxonomyReviewState,
   fetchFeatureByDictionaryName,
   saveAllCircuitTaxonomyEvidence,
-  saveCircuitTaxonomyDirectoryEvidence,
   saveCircuitTaxonomyReviewState,
 } from "@/utils/api";
 import { normalizeZPattern } from "@/utils/activationUtils";
@@ -324,7 +323,6 @@ export const CircuitTaxonomyAnnotation = () => {
   const [jumpingToPending, setJumpingToPending] = useState(false);
   const [exportingEvidence, setExportingEvidence] = useState(false);
   const [exportingDirectoryEvidence, setExportingDirectoryEvidence] = useState(false);
-  const [savingDirectoryEvidence, setSavingDirectoryEvidence] = useState(false);
   const [savingAllCircuitEvidence, setSavingAllCircuitEvidence] = useState(false);
   const [savedDirectoryEvidencePath, setSavedDirectoryEvidencePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1237,16 +1235,6 @@ export const CircuitTaxonomyAnnotation = () => {
     ],
   );
 
-  const handleClearCompletedReviewProposals = useCallback(() => {
-    const pendingProposals = reviewProposals.filter((proposal) => (proposal.status ?? "pending") === "pending");
-    setReviewProposals(pendingProposals);
-    setActiveReviewIndex(0);
-    if (reviewStateSaveTimerRef.current) {
-      window.clearTimeout(reviewStateSaveTimerRef.current);
-    }
-    void persistReviewStateNow(pendingProposals, 0);
-  }, [persistReviewStateNow, reviewProposals]);
-
 const handleExportEvidence = useCallback(async () => {
     if (!selectedDirectoryId || !selectedCircuitFile) {
       return;
@@ -1323,29 +1311,6 @@ const handleExportEvidence = useCallback(async () => {
     }
   }, [selectedDirectoryId]);
 
-  const handleSaveDirectoryEvidence = useCallback(async () => {
-    if (!selectedDirectoryId) {
-      return;
-    }
-
-    setSavingDirectoryEvidence(true);
-    setSavedDirectoryEvidencePath(null);
-    setError(null);
-    try {
-      const response = await saveCircuitTaxonomyDirectoryEvidence(selectedDirectoryId, {
-        maxSamples: 6,
-        topSquares: 8,
-        topZ: 12,
-        includeAnnotated: true,
-      });
-      setSavedDirectoryEvidencePath(`${response.relative_path} (${response.item_count} items)`);
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save directory taxonomy evidence");
-    } finally {
-      setSavingDirectoryEvidence(false);
-    }
-  }, [selectedDirectoryId]);
-
   const handleSaveAllCircuitEvidence = useCallback(async () => {
     if (!selectedDirectoryId) {
       return;
@@ -1410,14 +1375,6 @@ const handleExportEvidence = useCallback(async () => {
                   disabled={!selectedDirectoryId || exportingDirectoryEvidence}
                 >
                   {exportingDirectoryEvidence ? "Exporting Directory..." : "Export Directory Evidence"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void handleSaveDirectoryEvidence()}
-                  disabled={!selectedDirectoryId || savingDirectoryEvidence}
-                >
-                  {savingDirectoryEvidence ? "Saving All..." : "Save All Directory Taxonomy Evidence"}
                 </Button>
                 <Button
                   type="button"
@@ -1676,13 +1633,6 @@ const handleExportEvidence = useCallback(async () => {
                     disabled={reviewProposals.length === 0 || reviewBatchSaving}
                   >
                     {reviewBatchSaving ? "Approving..." : "Approve All Imported"}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={handleClearCompletedReviewProposals}
-                    disabled={reviewProposals.length === 0}
-                  >
-                    Clear Completed
                   </Button>
                   <Button
                     variant="outline"
