@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import pymongo
+import torch
 from tqdm import tqdm
 
 
@@ -263,9 +264,24 @@ def iter_sparse_samples(sampling: Any):
 
 
 class EvidenceExporter:
-    def __init__(self, *, client: MongoClient, sae_series: str, max_dataset_cache: int = 16):
+    def __init__(
+        self,
+        *,
+        client: MongoClient,
+        sae_series: str,
+        include_model_summary: bool,
+        model_name: str,
+        model_device: str | None,
+        max_dataset_cache: int = 16,
+    ):
         self.client = client
         self.sae_series = sae_series
+        self.include_model_summary = include_model_summary
+        self.model_name = model_name
+        self.model_device = model_device
+        self._model: Any = None
+        self._model_load_error: str | None = None
+        self._board_model_summary_cache: dict[str, dict[str, Any]] = {}
         self._get_dataset = lru_cache(maxsize=max_dataset_cache)(self._load_dataset)
 
     def _load_dataset(self, name: str, shard_idx: int, n_shards: int):
@@ -277,6 +293,106 @@ class EvidenceExporter:
     def get_feature_with_series(self, dictionary_name: str, feature_index: int):
         feature = self.client.get_feature(sae_name=dictionary_name, sae_series=self.sae_series, index=feature_index)
         return feature, self.sae_series
+
+    def get_model(self):
+        if self._model is not None:
+            return self._model
+        if self._model_load_error is not None:
+            raise RuntimeError(self._model_load_error)
+
+        try:
+            from transformer_lens import HookedTransformer
+
+            print(f"Loading BT4 model for WDL/top_moves: {self.model_name}", flush=True)
+            model = HookedTransformer.from_pretrained_no_processing(
+                self.model_name,
+                dtype=torch.float32,
+            ).eval()
+            if self.model_device:
+                model = model.to(self.model_device)
+            self._model = model
+            return self._model
+        except Exception as error:
+            self._model_load_error = str(error)
+            raise
+
+    def get_board_model_summary(self, fen: str) -> dict[str, Any]:
+        if not self.include_model_summary:
+            return {
+                "top_moves": [],
+                "model_analysis_error": "Model summary disabled.",
+            }
+        if fen in self._board_model_summary_cache:
+            return self._board_model_summary_cache[fen]
+
+        summary: dict[str, Any] = {}
+        try:
+            model = self.get_model()
+            with torch.no_grad():
+                output, _ = model.run_with_cache(fen, prepend_bos=False)
+
+            if isinstance(output, (list, tuple)) and len(output) >= 2:
+                wdl_tensor = output[1]
+                if tuple(wdl_tensor.shape) == (1, 3):
+                    wdl = [
+                        float(wdl_tensor[0][0].detach().cpu().item()),
+                        float(wdl_tensor[0][1].detach().cpu().item()),
+                        float(wdl_tensor[0][2].detach().cpu().item()),
+                    ]
+                    summary["wdl"] = {
+                        "current_player_win": wdl[0],
+                        "draw": wdl[1],
+                        "current_player_loss": wdl[2],
+                        "raw": wdl,
+                    }
+                    summary["wdl_value"] = float(wdl[0] - wdl[2])
+                    summary["value"] = summary["wdl_value"]
+
+            try:
+                from src.chess_utils import get_move_from_policy_output_with_prob
+            except Exception:
+                get_move_from_policy_output_with_prob = None
+
+            if get_move_from_policy_output_with_prob is None:
+                summary["top_moves"] = []
+            else:
+                policy_output = output[0] if isinstance(output, (list, tuple)) else output
+                if policy_output.dim() == 3:
+                    policy_output = policy_output[:, -1, :]
+                elif policy_output.dim() == 1:
+                    policy_output = policy_output.unsqueeze(0)
+
+                all_legal_moves = get_move_from_policy_output_with_prob(policy_output, fen, return_list=True)
+                if not isinstance(all_legal_moves, list):
+                    all_legal_moves = []
+
+                uci2idx_fn = None
+                try:
+                    from leela_interp import LeelaBoard as _LeelaBoard  # type: ignore
+
+                    uci2idx_fn = _LeelaBoard.from_fen(fen, history_synthesis=True).uci2idx
+                except Exception:
+                    uci2idx_fn = None
+
+                summary["top_moves"] = [
+                    {
+                        "uci": uci,
+                        "logit": round(float(score), 6),
+                        "prob": round(float(prob), 6),
+                        "idx": int(uci2idx_fn(uci)) if uci2idx_fn is not None else None,
+                    }
+                    for uci, score, prob in all_legal_moves[:5]
+                ]
+
+        except Exception as error:
+            summary = {
+                **summary,
+                "top_moves": summary.get("top_moves", []),
+                "model_analysis_error": str(error),
+            }
+
+        self._board_model_summary_cache[fen] = summary
+        return summary
 
     def build_feature_evidence(
         self,
@@ -332,6 +448,7 @@ class EvidenceExporter:
                         except Exception as dataset_error:
                             dataset_row = {"error": f"Failed to load dataset row: {dataset_error}"}
 
+                    model_summary = self.get_board_model_summary(fen) if fen else {}
                     sample_summaries.append(
                         {
                             "sample_index": dataset_index,
@@ -340,11 +457,11 @@ class EvidenceExporter:
                             "model_name": model_name,
                             "fen": fen,
                             "side_to_move": fen.split()[1] if fen and len(fen.split()) >= 2 else None,
-                            "wdl": None,
-                            "wdl_value": None,
-                            "value": None,
-                            "top_moves": [],
-                            "model_analysis_error": None,
+                            "wdl": model_summary.get("wdl"),
+                            "wdl_value": model_summary.get("wdl_value"),
+                            "value": model_summary.get("value"),
+                            "top_moves": model_summary.get("top_moves", []),
+                            "model_analysis_error": model_summary.get("model_analysis_error"),
                             "top_activated_squares": top_square_entries(act_indices, act_values, top_squares),
                             "top_z_pairs": top_z_pairs(z_indices, z_values, top_z),
                             "signals": compact_signals(dataset_row),
@@ -395,6 +512,35 @@ def write_jsonl(path: Path, items: list[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for item in items:
             handle.write(json.dumps(make_serializable(item), ensure_ascii=False) + "\n")
+
+
+def evidence_file_has_model_summary(path: Path, max_items: int = 20) -> bool:
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line_index, line in enumerate(handle):
+                if line_index >= max_items:
+                    break
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                samples = item.get("top_activation_samples")
+                if not isinstance(samples, list):
+                    continue
+                for sample in samples:
+                    if not isinstance(sample, dict):
+                        continue
+                    if sample.get("wdl") is not None:
+                        return True
+                    if sample.get("wdl_value") is not None:
+                        return True
+                    top_moves = sample.get("top_moves")
+                    if isinstance(top_moves, list) and len(top_moves) > 0:
+                        return True
+                    if sample.get("model_analysis_error"):
+                        return True
+    except (OSError, json.JSONDecodeError):
+        return False
+    return False
 
 
 def export_circuit_file(
@@ -572,6 +718,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=6)
     parser.add_argument("--top-squares", type=int, default=8)
     parser.add_argument("--top-z", type=int, default=12)
+    parser.add_argument("--model-name", default="lc0/BT4-1024x15x32h")
+    parser.add_argument("--model-device", default=None, help="Optional torch device for the BT4 model, e.g. cuda or cpu.")
+    parser.add_argument("--no-model-summary", action="store_true", help="Do not compute WDL/value/top_moves from the BT4 model.")
     parser.add_argument("--limit-files", type=int, default=None)
     parser.add_argument("--limit-features", type=int, default=None)
     parser.add_argument("--skip-existing", action="store_true", help="Skip output files that already exist.")
@@ -617,20 +766,34 @@ def main() -> int:
         raise SystemExit("No sae_series selected. Set SAE_SERIES, pass --sae-series, or keep Mongo preflight enabled.")
 
     client = MongoClient(MongoDBConfig(mongo_uri=args.mongo_uri, mongo_db=args.mongo_db))
-    exporter = EvidenceExporter(client=client, sae_series=sae_series)
+    exporter = EvidenceExporter(
+        client=client,
+        sae_series=sae_series,
+        include_model_summary=not args.no_model_summary,
+        model_name=args.model_name,
+        model_device=args.model_device,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: list[dict[str, Any]] = []
     total_items = 0
     print(f"Exporting {len(files)} circuit files from {directory}")
     print(f"Output directory: {output_dir}")
-    print(f"SAE series: {sae_series}; include_dataset={not args.no_dataset}")
+    print(
+        f"SAE series: {sae_series}; include_dataset={not args.no_dataset}; "
+        f"include_model_summary={not args.no_model_summary}"
+    )
 
     for circuit_index, file_path in enumerate(files):
         output_path = output_dir / f"{file_path.stem}.evidence.jsonl"
-        if args.skip_existing and output_path.exists():
+        if args.skip_existing and output_path.exists() and (args.no_model_summary or evidence_file_has_model_summary(output_path)):
             print(f"[{circuit_index + 1}/{len(files)}] skip existing {output_path.name}")
             continue
+        if args.skip_existing and output_path.exists() and not args.no_model_summary:
+            print(
+                f"[{circuit_index + 1}/{len(files)}] regenerating {output_path.name} because existing file lacks WDL/top_moves",
+                flush=True,
+            )
 
         print(f"[{circuit_index + 1}/{len(files)}] exporting {file_path.name}", flush=True)
         try:
