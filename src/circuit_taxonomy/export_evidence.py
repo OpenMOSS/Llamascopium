@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pymongo
 from tqdm import tqdm
 
 
@@ -273,6 +274,10 @@ class EvidenceExporter:
             raise ValueError(f"Dataset {name} not found")
         return load_dataset_shard(cfg, shard_idx, n_shards)
 
+    def get_feature_with_series(self, dictionary_name: str, feature_index: int):
+        feature = self.client.get_feature(sae_name=dictionary_name, sae_series=self.sae_series, index=feature_index)
+        return feature, self.sae_series
+
     def build_feature_evidence(
         self,
         *,
@@ -287,7 +292,7 @@ class EvidenceExporter:
     ) -> dict[str, Any]:
         dictionary_name = str(feature_ref.get("dictionary_name", "")).strip()
         feature_index = int(feature_ref.get("feature_index", -1))
-        feature = self.client.get_feature(sae_name=dictionary_name, sae_series=self.sae_series, index=feature_index)
+        feature, resolved_series = self.get_feature_with_series(dictionary_name, feature_index)
         if feature is None:
             raise ValueError(f"Feature {feature_index} not found in SAE {dictionary_name}/{self.sae_series}")
 
@@ -357,6 +362,7 @@ class EvidenceExporter:
             "feature_index_in_circuit": feature_index_in_circuit,
             "dictionary_name": dictionary_name,
             "feature_index": feature_index,
+            "sae_series": resolved_series,
             "layer": feature_ref.get("layer"),
             "feature_type": feature_ref.get("feature_type"),
             "node_id": feature_ref.get("node_id"),
@@ -434,21 +440,119 @@ def export_circuit_file(
             leave=False,
         )
     for feature_index_in_circuit, feature_ref in feature_iter:
-        items.append(
-            exporter.build_feature_evidence(
-                directory_id=directory_id,
-                circuit_detail=circuit_detail,
-                feature_ref=feature_ref,
-                feature_index_in_circuit=feature_index_in_circuit,
-                max_samples=max_samples,
-                top_squares=top_squares,
-                top_z=top_z,
-                include_dataset=include_dataset,
+        try:
+            items.append(
+                exporter.build_feature_evidence(
+                    directory_id=directory_id,
+                    circuit_detail=circuit_detail,
+                    feature_ref=feature_ref,
+                    feature_index_in_circuit=feature_index_in_circuit,
+                    max_samples=max_samples,
+                    top_squares=top_squares,
+                    top_z=top_z,
+                    include_dataset=include_dataset,
+                )
             )
-        )
+        except Exception as error:
+            items.append(
+                {
+                    "directory_id": directory_id,
+                    "file_name": circuit_detail.get("file_name"),
+                    "circuit_index": circuit_index,
+                    "feature_index_in_circuit": feature_index_in_circuit,
+                    "dictionary_name": feature_ref.get("dictionary_name"),
+                    "feature_index": feature_ref.get("feature_index"),
+                    "layer": feature_ref.get("layer"),
+                    "feature_type": feature_ref.get("feature_type"),
+                    "node_id": feature_ref.get("node_id"),
+                    "label": feature_ref.get("label"),
+                    "error": str(error),
+                    "top_activation_samples": [],
+                }
+            )
 
     write_jsonl(output_path, items)
     return len(items)
+
+
+def sample_feature_refs(files: list[Path], max_files: int = 3, max_features: int = 50) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for file_path in files[:max_files]:
+        with file_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        refs.extend(parse_features(payload)[:max_features])
+        if len(refs) >= max_features:
+            return refs[:max_features]
+    return refs
+
+
+def preflight_mongo(
+    *,
+    mongo_uri: str,
+    mongo_db: str,
+    requested_sae_series: str | None,
+    feature_refs: list[dict[str, Any]],
+    timeout_ms: int,
+) -> str:
+    if not feature_refs:
+        raise SystemExit("Mongo preflight failed: no feature refs were parsed from circuit files.")
+
+    client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=timeout_ms)
+    try:
+        client.admin.command("ping")
+        collection = client[mongo_db]["features"]
+        series_counts: dict[str, int] = {}
+        missing: list[str] = []
+        for feature_ref in feature_refs:
+            dictionary_name = str(feature_ref.get("dictionary_name", "")).strip()
+            feature_index = int(feature_ref.get("feature_index", -1))
+            query: dict[str, Any] = {
+                "sae_name": dictionary_name,
+                "index": feature_index,
+            }
+            if requested_sae_series:
+                query["sae_series"] = requested_sae_series
+            docs = list(collection.find(query, {"sae_series": 1}).limit(5))
+            if not docs:
+                missing.append(f"{dictionary_name}#{feature_index}")
+                continue
+            for doc in docs:
+                series = doc.get("sae_series")
+                if isinstance(series, str) and series:
+                    series_counts[series] = series_counts.get(series, 0) + 1
+        if not series_counts:
+            examples = ", ".join(missing[:5])
+            raise SystemExit(
+                "Mongo preflight failed: none of the sampled circuit features were found in "
+                f"{mongo_db}.features. Examples: {examples}"
+            )
+
+        selected_series = requested_sae_series
+        if requested_sae_series and requested_sae_series not in series_counts:
+            counts_text = ", ".join(f"{series}:{count}" for series, count in sorted(series_counts.items()))
+            raise SystemExit(
+                f"Mongo preflight failed: requested --sae-series {requested_sae_series!r} was not found for sampled features. "
+                f"Available sampled series: {counts_text}"
+            )
+        if not selected_series:
+            selected_series = max(series_counts.items(), key=lambda item: item[1])[0]
+
+        counts_text = ", ".join(f"{series}:{count}" for series, count in sorted(series_counts.items()))
+        print(f"Mongo preflight OK: {mongo_db}.features reachable; sampled sae_series counts: {counts_text}")
+        print(f"Using sae_series={selected_series!r}")
+        if missing:
+            raise SystemExit(
+                f"Mongo preflight failed: {len(missing)} sampled feature(s) were not found under "
+                f"sae_series={selected_series!r}. First examples: {', '.join(missing[:5])}"
+            )
+        return selected_series
+    except pymongo.errors.PyMongoError as error:
+        raise SystemExit(
+            "Mongo preflight failed: could not connect/query MongoDB. "
+            f"uri={mongo_uri!r}, db={mongo_db!r}, error={error}"
+        ) from error
+    finally:
+        client.close()
 
 
 def parse_args() -> argparse.Namespace:
@@ -459,9 +563,11 @@ def parse_args() -> argparse.Namespace:
         help="Circuit JSON directory, absolute or relative to repo root.",
     )
     parser.add_argument("--output-dir", default=None, help="Output directory. Defaults to outputs/circuit_taxonomy_evidence/<directory>/per-circuit-<timestamp>.")
-    parser.add_argument("--sae-series", default=os.environ.get("SAE_SERIES", "default"))
-    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017/"))
+    parser.add_argument("--sae-series", default=os.environ.get("SAE_SERIES"))
+    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://10.244.81.97:27017"))
     parser.add_argument("--mongo-db", default=os.environ.get("MONGO_DB", "mechinterp"))
+    parser.add_argument("--mongo-timeout-ms", type=int, default=5000)
+    parser.add_argument("--no-mongo-preflight", action="store_true", help="Skip Mongo connectivity and sae_series preflight.")
     parser.add_argument("--file-glob", default="*.json")
     parser.add_argument("--max-samples", type=int, default=6)
     parser.add_argument("--top-squares", type=int, default=8)
@@ -498,15 +604,27 @@ def main() -> int:
     if not files:
         raise SystemExit(f"No circuit files matched {args.file_glob} in {directory}")
 
+    sae_series = args.sae_series
+    if not args.no_mongo_preflight:
+        sae_series = preflight_mongo(
+            mongo_uri=args.mongo_uri,
+            mongo_db=args.mongo_db,
+            requested_sae_series=sae_series,
+            feature_refs=sample_feature_refs(files),
+            timeout_ms=args.mongo_timeout_ms,
+        )
+    if not sae_series:
+        raise SystemExit("No sae_series selected. Set SAE_SERIES, pass --sae-series, or keep Mongo preflight enabled.")
+
     client = MongoClient(MongoDBConfig(mongo_uri=args.mongo_uri, mongo_db=args.mongo_db))
-    exporter = EvidenceExporter(client=client, sae_series=args.sae_series)
+    exporter = EvidenceExporter(client=client, sae_series=sae_series)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     manifest: list[dict[str, Any]] = []
     total_items = 0
     print(f"Exporting {len(files)} circuit files from {directory}")
     print(f"Output directory: {output_dir}")
-    print(f"SAE series: {args.sae_series}; include_dataset={not args.no_dataset}")
+    print(f"SAE series: {sae_series}; include_dataset={not args.no_dataset}")
 
     for circuit_index, file_path in enumerate(files):
         output_path = output_dir / f"{file_path.stem}.evidence.jsonl"
