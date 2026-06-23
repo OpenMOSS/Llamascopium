@@ -533,6 +533,8 @@ def get_circuit_taxonomy_router(
         max_samples: int,
         top_squares: int,
         top_z: int,
+        include_annotated: bool = False,
+        single_file_only: bool = False,
     ) -> list[dict[str, Any]]:
         directory = resolve_directory(directory_id)
         files = list_files(directory)
@@ -571,9 +573,14 @@ def get_circuit_taxonomy_router(
             }
 
             while safe_limit is None or len(evidence_items) < safe_limit:
-                feature_index_in_circuit = find_first_unannotated_feature_index(features, feature_start)
-                if feature_index_in_circuit is None:
-                    break
+                if include_annotated:
+                    if feature_start >= len(features):
+                        break
+                    feature_index_in_circuit = feature_start
+                else:
+                    feature_index_in_circuit = find_first_unannotated_feature_index(features, feature_start)
+                    if feature_index_in_circuit is None:
+                        break
 
                 feature_ref = features[feature_index_in_circuit]
                 evidence_items.append(
@@ -591,6 +598,8 @@ def get_circuit_taxonomy_router(
                 feature_start = feature_index_in_circuit + 1
 
             if safe_limit is not None and len(evidence_items) >= safe_limit:
+                break
+            if single_file_only and file_name:
                 break
 
         return evidence_items
@@ -717,6 +726,8 @@ def get_circuit_taxonomy_router(
         max_samples: int = 6,
         top_squares: int = 8,
         top_z: int = 12,
+        include_annotated: bool = False,
+        single_file_only: bool = False,
     ):
         content = evidence_items_to_jsonl(
             collect_evidence_items(
@@ -727,6 +738,8 @@ def get_circuit_taxonomy_router(
                 max_samples=max_samples,
                 top_squares=top_squares,
                 top_z=top_z,
+                include_annotated=include_annotated,
+                single_file_only=single_file_only,
             )
         )
         return Response(
@@ -753,6 +766,8 @@ def get_circuit_taxonomy_router(
             max_samples=int(request.get("max_samples", 6)),
             top_squares=int(request.get("top_squares", 8)),
             top_z=int(request.get("top_z", 12)),
+            include_annotated=bool(request.get("include_annotated", False)),
+            single_file_only=False,
         )
         content = evidence_items_to_jsonl(evidence_items)
 
@@ -768,6 +783,62 @@ def get_circuit_taxonomy_router(
             "path": str(file_path),
             "relative_path": str(file_path.relative_to(repo_root)),
             "item_count": len(evidence_items),
+        }
+
+    @router.post("/circuit_taxonomy/save_all_circuit_evidence")
+    def save_all_circuit_evidence(request: dict[str, Any]):
+        directory_id = str(request.get("directory_id", "")).strip()
+        if not directory_id:
+            raise HTTPException(status_code=400, detail="directory_id is required")
+
+        directory = resolve_directory(directory_id)
+        files = list_files(directory)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        safe_directory_id = re.sub(r"[^a-zA-Z0-9_.-]+", "_", directory_id).strip("_") or "directory"
+        output_dir = evidence_output_dir / safe_directory_id / f"per-circuit-{timestamp}"
+        max_samples = int(request.get("max_samples", 6))
+        top_squares = int(request.get("top_squares", 8))
+        top_z = int(request.get("top_z", 12))
+        include_annotated = bool(request.get("include_annotated", True))
+
+        saved_files: list[dict[str, Any]] = []
+        total_items = 0
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for path in files:
+                evidence_items = collect_evidence_items(
+                    directory_id=directory_id,
+                    file_name=path.name,
+                    start_feature_index=0,
+                    limit=None,
+                    max_samples=max_samples,
+                    top_squares=top_squares,
+                    top_z=top_z,
+                    include_annotated=include_annotated,
+                    single_file_only=True,
+                )
+                output_path = output_dir / f"{path.stem}.evidence.jsonl"
+                output_path.write_text(evidence_items_to_jsonl(evidence_items), encoding="utf-8")
+                total_items += len(evidence_items)
+                saved_files.append(
+                    {
+                        "file_name": path.name,
+                        "item_count": len(evidence_items),
+                        "path": str(output_path),
+                        "relative_path": str(output_path.relative_to(repo_root)),
+                    }
+                )
+        except OSError as error:
+            raise HTTPException(status_code=500, detail=f"Failed to save per-circuit taxonomy evidence: {error}")
+
+        return {
+            "status": "saved",
+            "directory_id": directory_id,
+            "path": str(output_dir),
+            "relative_path": str(output_dir.relative_to(repo_root)),
+            "file_count": len(saved_files),
+            "item_count": total_items,
+            "files": saved_files,
         }
 
     @router.get("/circuit_taxonomy/review_state")
@@ -833,14 +904,9 @@ def get_circuit_taxonomy_router(
             "updated_at": state["updated_at"],
         }
 
-    @router.post("/circuit_taxonomy/annotate")
-    def annotate_feature(request: dict[str, Any]):
-        dictionary_name = str(request.get("dictionary_name", "")).strip()
-        taxonomy = str(request.get("taxonomy", "")).strip()
-        overwrite = bool(request.get("overwrite", False))
-
+    def annotate_feature_item(dictionary_name: str, feature_index: int, taxonomy: str, overwrite: bool) -> dict[str, Any]:
         try:
-            feature_index = int(request.get("feature_index"))
+            feature_index = int(feature_index)
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="feature_index must be an integer")
 
@@ -908,6 +974,102 @@ def get_circuit_taxonomy_router(
             "existing_taxonomy": existing_prefix,
             "interpretation": updated_interpretation,
             "overwritten": existing_prefix is not None and existing_prefix != taxonomy,
+        }
+
+    @router.post("/circuit_taxonomy/annotate")
+    def annotate_feature(request: dict[str, Any]):
+        dictionary_name = str(request.get("dictionary_name", "")).strip()
+        taxonomy = str(request.get("taxonomy", "")).strip()
+        overwrite = bool(request.get("overwrite", False))
+        try:
+            feature_index = int(request.get("feature_index"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="feature_index must be an integer")
+
+        return annotate_feature_item(
+            dictionary_name=dictionary_name,
+            feature_index=feature_index,
+            taxonomy=taxonomy,
+            overwrite=overwrite,
+        )
+
+    @router.post("/circuit_taxonomy/annotate_batch")
+    def annotate_batch(request: dict[str, Any]):
+        raw_items = request.get("items", [])
+        if not isinstance(raw_items, list):
+            raise HTTPException(status_code=400, detail="items must be a list")
+
+        overwrite = bool(request.get("overwrite", True))
+        results: list[dict[str, Any]] = []
+        counts: dict[str, int] = {
+            "updated": 0,
+            "unchanged": 0,
+            "conflict": 0,
+            "error": 0,
+        }
+
+        for raw_index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                counts["error"] += 1
+                results.append(
+                    {
+                        "index": raw_index,
+                        "status": "error",
+                        "error": "item must be an object",
+                    }
+                )
+                continue
+
+            dictionary_name = str(raw_item.get("dictionary_name") or raw_item.get("dictionaryName") or "").strip()
+            taxonomy = str(raw_item.get("taxonomy", "")).strip()
+            try:
+                feature_index = int(raw_item.get("feature_index", raw_item.get("featureIndex")))
+                result = annotate_feature_item(
+                    dictionary_name=dictionary_name,
+                    feature_index=feature_index,
+                    taxonomy=taxonomy,
+                    overwrite=overwrite,
+                )
+                status = str(result.get("status", "updated"))
+                counts[status] = counts.get(status, 0) + 1
+                results.append(
+                    {
+                        "index": raw_index,
+                        "dictionary_name": dictionary_name,
+                        "feature_index": feature_index,
+                        **result,
+                    }
+                )
+            except HTTPException as error:
+                counts["error"] += 1
+                results.append(
+                    {
+                        "index": raw_index,
+                        "dictionary_name": dictionary_name,
+                        "feature_index": raw_item.get("feature_index", raw_item.get("featureIndex")),
+                        "taxonomy": taxonomy,
+                        "status": "error",
+                        "error": error.detail,
+                    }
+                )
+            except Exception as error:
+                counts["error"] += 1
+                results.append(
+                    {
+                        "index": raw_index,
+                        "dictionary_name": dictionary_name,
+                        "feature_index": raw_item.get("feature_index", raw_item.get("featureIndex")),
+                        "taxonomy": taxonomy,
+                        "status": "error",
+                        "error": str(error),
+                    }
+                )
+
+        return {
+            "status": "completed",
+            "item_count": len(raw_items),
+            "counts": counts,
+            "results": results,
         }
 
     return router

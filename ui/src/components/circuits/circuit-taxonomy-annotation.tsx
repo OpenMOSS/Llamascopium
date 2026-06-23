@@ -17,6 +17,7 @@ import {
 import { LinkGraphContainer } from "./link-graph-container";
 import { transformCircuitData } from "./link-graph/utils";
 import {
+  annotateCircuitTaxonomyFeatures,
   annotateCircuitTaxonomyFeature,
   buildCircuitTaxonomyEvidenceExportUrl,
   CircuitTaxonomyCircuitDetail,
@@ -29,6 +30,7 @@ import {
   fetchCircuitTaxonomyResumeTarget,
   fetchCircuitTaxonomyReviewState,
   fetchFeatureByDictionaryName,
+  saveAllCircuitTaxonomyEvidence,
   saveCircuitTaxonomyDirectoryEvidence,
   saveCircuitTaxonomyReviewState,
 } from "@/utils/api";
@@ -136,16 +138,33 @@ const normalizeReviewProposal = (raw: unknown, index: number): CircuitTaxonomyRe
   };
 };
 
-const parseReviewProposals = (rawText: string): CircuitTaxonomyReviewProposal[] => {
+const parseReviewProposalImport = (
+  rawText: string,
+): { proposals: CircuitTaxonomyReviewProposal[]; activeReviewIndex?: number } => {
   const trimmed = rawText.trim();
   if (!trimmed) {
-    return [];
+    return { proposals: [] };
   }
 
   let rawItems: unknown[];
+  let activeReviewIndex: number | undefined;
   try {
     const parsed = JSON.parse(trimmed);
-    rawItems = Array.isArray(parsed) ? parsed : [parsed];
+    if (Array.isArray(parsed)) {
+      rawItems = parsed;
+    } else if (parsed && typeof parsed === "object" && Array.isArray((parsed as Record<string, unknown>).proposals)) {
+      const parsedObject = parsed as Record<string, unknown>;
+      rawItems = parsedObject.proposals as unknown[];
+      const rawActiveIndex = parsedObject.activeReviewIndex ?? parsedObject.active_review_index;
+      if (rawActiveIndex !== undefined && rawActiveIndex !== null) {
+        const parsedActiveIndex = Number(rawActiveIndex);
+        if (Number.isFinite(parsedActiveIndex)) {
+          activeReviewIndex = parsedActiveIndex;
+        }
+      }
+    } else {
+      rawItems = [parsed];
+    }
   } catch {
     rawItems = trimmed
       .split(/\r?\n/)
@@ -154,9 +173,11 @@ const parseReviewProposals = (rawText: string): CircuitTaxonomyReviewProposal[] 
       .map((line) => JSON.parse(line));
   }
 
-  return rawItems
+  const proposals = rawItems
     .map((item, index) => normalizeReviewProposal(item, index))
     .filter((item): item is CircuitTaxonomyReviewProposal => item !== null);
+
+  return { proposals, activeReviewIndex };
 };
 
 const extractChessTopActivationSamples = (
@@ -304,6 +325,7 @@ export const CircuitTaxonomyAnnotation = () => {
   const [exportingEvidence, setExportingEvidence] = useState(false);
   const [exportingDirectoryEvidence, setExportingDirectoryEvidence] = useState(false);
   const [savingDirectoryEvidence, setSavingDirectoryEvidence] = useState(false);
+  const [savingAllCircuitEvidence, setSavingAllCircuitEvidence] = useState(false);
   const [savedDirectoryEvidencePath, setSavedDirectoryEvidencePath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reviewProposals, setReviewProposals] = useState<CircuitTaxonomyReviewProposal[]>([]);
@@ -311,13 +333,26 @@ export const CircuitTaxonomyAnnotation = () => {
   const [activeReviewIndex, setActiveReviewIndex] = useState(0);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewBatchSaving, setReviewBatchSaving] = useState(false);
   const [reviewStateMessage, setReviewStateMessage] = useState<string | null>(null);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
   const pendingFeatureLoads = useRef<Map<string, Promise<Feature | null>>>(new Map());
   const pendingResumeFeatureIndexRef = useRef<number | null>(null);
   const reviewStateLoadedRef = useRef(false);
-  const reviewStateSaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const reviewStateSaveTimerRef = useRef<number | null>(null);
+
+  const persistReviewStateNow = useCallback(
+    async (proposals: CircuitTaxonomyReviewProposal[], activeIndex: number) => {
+      try {
+        const response = await saveCircuitTaxonomyReviewState(proposals, activeIndex);
+        setReviewStateMessage(`Saved ${response.proposal_count ?? proposals.length} review items to backend.`);
+      } catch (saveError) {
+        setReviewStateMessage(saveError instanceof Error ? `Backend review save failed: ${saveError.message}` : "Backend review save failed.");
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -385,13 +420,7 @@ export const CircuitTaxonomyAnnotation = () => {
     }
 
     reviewStateSaveTimerRef.current = window.setTimeout(() => {
-      void saveCircuitTaxonomyReviewState(reviewProposals, activeReviewIndex)
-        .then((response) => {
-          setReviewStateMessage(`Saved ${response.proposal_count ?? reviewProposals.length} review items to backend.`);
-        })
-        .catch((saveError) => {
-          setReviewStateMessage(saveError instanceof Error ? `Backend review save failed: ${saveError.message}` : "Backend review save failed.");
-        });
+      void persistReviewStateNow(reviewProposals, activeReviewIndex);
     }, 600);
 
     return () => {
@@ -399,7 +428,7 @@ export const CircuitTaxonomyAnnotation = () => {
         window.clearTimeout(reviewStateSaveTimerRef.current);
       }
     };
-  }, [activeReviewIndex, reviewProposals]);
+  }, [activeReviewIndex, persistReviewStateNow, reviewProposals]);
 
   useEffect(() => {
     let cancelled = false;
@@ -827,8 +856,8 @@ export const CircuitTaxonomyAnnotation = () => {
   const handleImportReviewProposals = useCallback(() => {
     setReviewError(null);
     try {
-      const parsed = parseReviewProposals(reviewImportText);
-      if (parsed.length === 0) {
+      const parsed = parseReviewProposalImport(reviewImportText);
+      if (parsed.proposals.length === 0) {
         setReviewError("No valid proposals were found.");
         return;
       }
@@ -836,7 +865,7 @@ export const CircuitTaxonomyAnnotation = () => {
       setReviewProposals((prev) => {
         const seen = new Set(prev.map((proposal) => proposal.id));
         const next = [...prev];
-        for (const proposal of parsed) {
+        for (const proposal of parsed.proposals) {
           if (!seen.has(proposal.id)) {
             next.push(proposal);
             seen.add(proposal.id);
@@ -844,12 +873,53 @@ export const CircuitTaxonomyAnnotation = () => {
         }
         return next;
       });
-      setActiveReviewIndex((prev) => (reviewProposals.length === 0 ? 0 : prev));
+      if (parsed.activeReviewIndex !== undefined) {
+        setActiveReviewIndex(Math.min(Math.max(parsed.activeReviewIndex, 0), Math.max(parsed.proposals.length - 1, 0)));
+      } else {
+        setActiveReviewIndex((prev) => (reviewProposals.length === 0 ? 0 : prev));
+      }
       setReviewImportText("");
     } catch (importError) {
       setReviewError(importError instanceof Error ? importError.message : "Failed to parse review proposals.");
     }
   }, [reviewImportText, reviewProposals.length]);
+
+  const handleImportReviewProposalFiles = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) {
+        return;
+      }
+
+      setReviewError(null);
+      try {
+        const parsedBatches = await Promise.all(
+          Array.from(files).map(async (file) => parseReviewProposalImport(await file.text())),
+        );
+        const imported = parsedBatches.flatMap((batch) => batch.proposals);
+        if (imported.length === 0) {
+          setReviewError("No valid proposals were found in the selected files.");
+          return;
+        }
+
+        setReviewProposals((prev) => {
+          const seen = new Set(prev.map((proposal) => proposal.id));
+          const next = [...prev];
+          for (const proposal of imported) {
+            if (!seen.has(proposal.id)) {
+              next.push(proposal);
+              seen.add(proposal.id);
+            }
+          }
+          return next;
+        });
+        setActiveReviewIndex((prev) => (reviewProposals.length === 0 ? 0 : prev));
+        setReviewStateMessage(`Imported ${imported.length} review items from ${files.length} file(s).`);
+      } catch (importError) {
+        setReviewError(importError instanceof Error ? importError.message : "Failed to parse review proposal files.");
+      }
+    },
+    [reviewProposals.length],
+  );
 
   const handleAddCurrentFeatureToReview = useCallback(() => {
     if (!currentFeatureRef || !circuitDetail) {
@@ -1077,10 +1147,105 @@ export const CircuitTaxonomyAnnotation = () => {
     updateReviewProposal,
   ]);
 
+  const handleApproveReviewProposals = useCallback(
+    async (scope: "current-circuit" | "all") => {
+      const proposalsToApprove = reviewProposals.filter((proposal) => {
+        if (!proposal.taxonomy || (proposal.status ?? "pending") === "approved") {
+          return false;
+        }
+        if (scope === "all") {
+          return true;
+        }
+        return Boolean(selectedCircuitFile) && proposal.fileName === selectedCircuitFile;
+      });
+
+      if (proposalsToApprove.length === 0) {
+        setReviewError(scope === "all" ? "No pending review proposals to approve." : "No pending review proposals for the current circuit.");
+        return;
+      }
+
+      const confirmed = window.confirm(
+        scope === "all"
+          ? `Approve and save ${proposalsToApprove.length} pending review proposals across all imported circuits?`
+          : `Approve and save ${proposalsToApprove.length} pending review proposals for ${selectedCircuitFile}?`,
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      setReviewBatchSaving(true);
+      setReviewError(null);
+      try {
+        const response = await annotateCircuitTaxonomyFeatures(
+          proposalsToApprove.map((proposal) => ({
+            dictionary_name: proposal.dictionaryName,
+            feature_index: proposal.featureIndex,
+            taxonomy: proposal.taxonomy,
+          })),
+          true,
+        );
+        const resultByProposalId = new Map<string, Record<string, unknown>>();
+        response.results.forEach((result, index) => {
+          resultByProposalId.set(proposalsToApprove[index].id, result);
+        });
+
+        const nextProposals = reviewProposals.map((proposal) => {
+          const result = resultByProposalId.get(proposal.id);
+          if (!result) {
+            return proposal;
+          }
+          if (result.status === "error") {
+            return {
+              ...proposal,
+              status: "error" as const,
+              error: String(result.error ?? "Failed to approve proposal."),
+            };
+          }
+          return {
+            ...proposal,
+            status: "approved" as const,
+            error: undefined,
+          };
+        });
+
+        setReviewProposals(nextProposals);
+        const nextPendingIndex = nextProposals.findIndex((proposal) => (proposal.status ?? "pending") === "pending");
+        setActiveReviewIndex(nextPendingIndex >= 0 ? nextPendingIndex : 0);
+        if (reviewStateSaveTimerRef.current) {
+          window.clearTimeout(reviewStateSaveTimerRef.current);
+        }
+        await persistReviewStateNow(nextProposals, nextPendingIndex >= 0 ? nextPendingIndex : 0);
+        setReviewStateMessage(
+          `Batch approved ${response.counts.updated ?? 0} updated, ${response.counts.unchanged ?? 0} unchanged, ${response.counts.error ?? 0} errors.`,
+        );
+
+        if (currentFeatureRef) {
+          await refreshFeature(currentFeatureRef);
+        }
+      } catch (approveError) {
+        setReviewError(approveError instanceof Error ? approveError.message : "Failed to batch approve review proposals.");
+      } finally {
+        setReviewBatchSaving(false);
+      }
+    },
+    [
+      currentFeatureRef,
+      persistReviewStateNow,
+      refreshFeature,
+      reviewProposals,
+      selectedCircuitFile,
+    ],
+  );
+
   const handleClearCompletedReviewProposals = useCallback(() => {
-    setReviewProposals((prev) => prev.filter((proposal) => (proposal.status ?? "pending") === "pending"));
+    const pendingProposals = reviewProposals.filter((proposal) => (proposal.status ?? "pending") === "pending");
+    setReviewProposals(pendingProposals);
     setActiveReviewIndex(0);
-  }, []);
+    if (reviewStateSaveTimerRef.current) {
+      window.clearTimeout(reviewStateSaveTimerRef.current);
+    }
+    void persistReviewStateNow(pendingProposals, 0);
+  }, [persistReviewStateNow, reviewProposals]);
 
 const handleExportEvidence = useCallback(async () => {
     if (!selectedDirectoryId || !selectedCircuitFile) {
@@ -1092,11 +1257,13 @@ const handleExportEvidence = useCallback(async () => {
     try {
       const url = buildCircuitTaxonomyEvidenceExportUrl(selectedDirectoryId, {
         fileName: selectedCircuitFile,
-        startFeatureIndex: currentFeatureIndex,
-        limit: 100,
+        startFeatureIndex: 0,
+        limit: 0,
         maxSamples: 6,
         topSquares: 8,
         topZ: 12,
+        includeAnnotated: true,
+        singleFileOnly: true,
       });
       const response = await fetch(url);
       if (!response.ok) {
@@ -1107,7 +1274,7 @@ const handleExportEvidence = useCallback(async () => {
       const objectUrl = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = objectUrl;
-      link.download = "circuit-taxonomy-evidence.jsonl";
+      link.download = `circuit-taxonomy-evidence-${selectedCircuitFile.replace(/[^a-zA-Z0-9_-]+/g, "_")}.jsonl`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1117,7 +1284,7 @@ const handleExportEvidence = useCallback(async () => {
     } finally {
       setExportingEvidence(false);
     }
-  }, [currentFeatureIndex, selectedCircuitFile, selectedDirectoryId]);
+  }, [selectedCircuitFile, selectedDirectoryId]);
 
   const handleExportDirectoryEvidence = useCallback(async () => {
     if (!selectedDirectoryId) {
@@ -1129,10 +1296,11 @@ const handleExportEvidence = useCallback(async () => {
     try {
       const url = buildCircuitTaxonomyEvidenceExportUrl(selectedDirectoryId, {
         startFeatureIndex: 0,
-        limit: 500,
+        limit: 0,
         maxSamples: 6,
         topSquares: 8,
         topZ: 12,
+        includeAnnotated: true,
       });
       const response = await fetch(url);
       if (!response.ok) {
@@ -1168,12 +1336,38 @@ const handleExportEvidence = useCallback(async () => {
         maxSamples: 6,
         topSquares: 8,
         topZ: 12,
+        includeAnnotated: true,
       });
       setSavedDirectoryEvidencePath(`${response.relative_path} (${response.item_count} items)`);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Failed to save directory taxonomy evidence");
     } finally {
       setSavingDirectoryEvidence(false);
+    }
+  }, [selectedDirectoryId]);
+
+  const handleSaveAllCircuitEvidence = useCallback(async () => {
+    if (!selectedDirectoryId) {
+      return;
+    }
+
+    setSavingAllCircuitEvidence(true);
+    setSavedDirectoryEvidencePath(null);
+    setError(null);
+    try {
+      const response = await saveAllCircuitTaxonomyEvidence(selectedDirectoryId, {
+        maxSamples: 6,
+        topSquares: 8,
+        topZ: 12,
+        includeAnnotated: true,
+      });
+      setSavedDirectoryEvidencePath(
+        `${response.relative_path} (${response.file_count ?? 0} files, ${response.item_count} items)`,
+      );
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Failed to save per-circuit taxonomy evidence");
+    } finally {
+      setSavingAllCircuitEvidence(false);
     }
   }, [selectedDirectoryId]);
 
@@ -1224,6 +1418,14 @@ const handleExportEvidence = useCallback(async () => {
                   disabled={!selectedDirectoryId || savingDirectoryEvidence}
                 >
                   {savingDirectoryEvidence ? "Saving All..." : "Save All Directory Taxonomy Evidence"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleSaveAllCircuitEvidence()}
+                  disabled={!selectedDirectoryId || savingAllCircuitEvidence}
+                >
+                  {savingAllCircuitEvidence ? "Saving Circuit Files..." : "Save All Circuit Evidence"}
                 </Button>
               </div>
               {savedDirectoryEvidencePath && (
@@ -1358,7 +1560,7 @@ const handleExportEvidence = useCallback(async () => {
                       onClick={() => void handleExportEvidence()}
                       disabled={!circuitDetail || exportingEvidence}
                     >
-                      {exportingEvidence ? "Exporting..." : "Export Evidence"}
+                      {exportingEvidence ? "Exporting..." : "Export Circuit Evidence"}
                     </Button>
                   </div>
 
@@ -1460,6 +1662,20 @@ const handleExportEvidence = useCallback(async () => {
                   </Button>
                   <Button onClick={handleApproveReviewProposal} disabled={!activeReviewProposal || reviewSaving}>
                     {reviewSaving ? "Approving..." : "Approve And Save"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleApproveReviewProposals("current-circuit")}
+                    disabled={!selectedCircuitFile || reviewBatchSaving}
+                  >
+                    {reviewBatchSaving ? "Approving..." : "Approve Current Circuit"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleApproveReviewProposals("all")}
+                    disabled={reviewProposals.length === 0 || reviewBatchSaving}
+                  >
+                    {reviewBatchSaving ? "Approving..." : "Approve All Imported"}
                   </Button>
                   <Button
                     variant="outline"
@@ -1643,7 +1859,7 @@ const handleExportEvidence = useCallback(async () => {
             <CardHeader>
               <CardTitle>Import LLM Proposals</CardTitle>
               <CardDescription>
-                Paste a JSON array or JSONL. Required fields are dictionary_name, feature_index, and taxonomy.
+                Paste JSONL, a JSON array, or review-state.json with proposals. Required fields are dictionary_name, feature_index, and taxonomy.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
@@ -1655,6 +1871,19 @@ const handleExportEvidence = useCallback(async () => {
               />
               <div className="flex flex-wrap gap-2">
                 <Button onClick={handleImportReviewProposals}>Import</Button>
+                <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground">
+                  Import Files
+                  <input
+                    type="file"
+                    accept=".json,.jsonl,application/json,application/x-ndjson"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      void handleImportReviewProposalFiles(event.target.files);
+                      event.target.value = "";
+                    }}
+                  />
+                </label>
                 <Button variant="outline" onClick={() => setReviewImportText("")}>
                   Clear
                 </Button>

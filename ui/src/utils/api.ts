@@ -309,6 +309,20 @@ export interface CircuitTaxonomySaveDirectoryEvidenceResponse {
   path: string;
   relative_path: string;
   item_count: number;
+  file_count?: number;
+  files?: Array<{
+    file_name: string;
+    item_count: number;
+    path: string;
+    relative_path: string;
+  }>;
+}
+
+export interface CircuitTaxonomyBatchAnnotateResponse {
+  status: "completed";
+  item_count: number;
+  counts: Record<string, number>;
+  results: Array<Record<string, unknown>>;
 }
 
 export interface CircuitTaxonomyReviewStateResponse {
@@ -407,6 +421,8 @@ export const buildCircuitTaxonomyEvidenceExportUrl = (
     maxSamples?: number;
     topSquares?: number;
     topZ?: number;
+    includeAnnotated?: boolean;
+    singleFileOnly?: boolean;
   } = {},
 ): string => {
   const params = new URLSearchParams();
@@ -429,6 +445,12 @@ export const buildCircuitTaxonomyEvidenceExportUrl = (
   if (options.topZ !== undefined) {
     params.set("top_z", String(options.topZ));
   }
+  if (options.includeAnnotated !== undefined) {
+    params.set("include_annotated", String(options.includeAnnotated));
+  }
+  if (options.singleFileOnly !== undefined) {
+    params.set("single_file_only", String(options.singleFileOnly));
+  }
 
   return `${API_BASE}/circuit_taxonomy/export_evidence?${params.toString()}`;
 };
@@ -440,6 +462,7 @@ export const saveCircuitTaxonomyDirectoryEvidence = async (
     maxSamples?: number;
     topSquares?: number;
     topZ?: number;
+    includeAnnotated?: boolean;
   } = {},
 ): Promise<CircuitTaxonomySaveDirectoryEvidenceResponse> => {
   const response = await fetch(`${API_BASE}/circuit_taxonomy/save_directory_evidence`, {
@@ -453,6 +476,36 @@ export const saveCircuitTaxonomyDirectoryEvidence = async (
       max_samples: options.maxSamples ?? 6,
       top_squares: options.topSquares ?? 8,
       top_z: options.topZ ?? 12,
+      include_annotated: options.includeAnnotated ?? false,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const saveAllCircuitTaxonomyEvidence = async (
+  directoryId: string,
+  options: {
+    maxSamples?: number;
+    topSquares?: number;
+    topZ?: number;
+    includeAnnotated?: boolean;
+  } = {},
+): Promise<CircuitTaxonomySaveDirectoryEvidenceResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/save_all_circuit_evidence`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      directory_id: directoryId,
+      max_samples: options.maxSamples ?? 6,
+      top_squares: options.topSquares ?? 8,
+      top_z: options.topZ ?? 12,
+      include_annotated: options.includeAnnotated ?? true,
     }),
   });
 
@@ -506,6 +559,33 @@ export const annotateCircuitTaxonomyFeature = async (
       dictionary_name: dictionaryName,
       feature_index: featureIndex,
       taxonomy,
+      overwrite,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const annotateCircuitTaxonomyFeatures = async (
+  items: Array<{
+    dictionary_name?: string;
+    dictionaryName?: string;
+    feature_index?: number;
+    featureIndex?: number;
+    taxonomy: string;
+  }>,
+  overwrite: boolean = true,
+): Promise<CircuitTaxonomyBatchAnnotateResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/annotate_batch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      items,
       overwrite,
     }),
   });
