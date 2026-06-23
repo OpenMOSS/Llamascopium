@@ -311,6 +311,15 @@ export interface CircuitTaxonomySaveDirectoryEvidenceResponse {
   item_count: number;
 }
 
+export interface CircuitTaxonomyReviewStateResponse {
+  status: "missing" | "loaded" | "saved";
+  proposals: unknown[];
+  active_review_index: number;
+  updated_at: string | null;
+  relative_path?: string;
+  proposal_count?: number;
+}
+
 export const fetchCircuitTaxonomyDirectories = async (): Promise<{
   directories: CircuitTaxonomyDirectoryOption[];
   taxonomy_labels: string[];
@@ -444,6 +453,35 @@ export const saveCircuitTaxonomyDirectoryEvidence = async (
       max_samples: options.maxSamples ?? 6,
       top_squares: options.topSquares ?? 8,
       top_z: options.topZ ?? 12,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const fetchCircuitTaxonomyReviewState = async (): Promise<CircuitTaxonomyReviewStateResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/review_state`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const saveCircuitTaxonomyReviewState = async (
+  proposals: unknown[],
+  activeReviewIndex: number,
+): Promise<CircuitTaxonomyReviewStateResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/review_state`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      proposals,
+      active_review_index: activeReviewIndex,
     }),
   });
 

@@ -45,6 +45,7 @@ def get_circuit_taxonomy_router(
 ) -> APIRouter:
     router = APIRouter()
     evidence_output_dir = repo_root / "outputs" / "circuit_taxonomy_evidence"
+    review_state_path = repo_root / "outputs" / "circuit_taxonomy_reviews" / "review-state.json"
 
     def list_directory_options() -> list[dict[str, str]]:
         options: list[dict[str, str]] = []
@@ -767,6 +768,69 @@ def get_circuit_taxonomy_router(
             "path": str(file_path),
             "relative_path": str(file_path.relative_to(repo_root)),
             "item_count": len(evidence_items),
+        }
+
+    @router.get("/circuit_taxonomy/review_state")
+    def get_review_state():
+        if not review_state_path.exists():
+            return {
+                "status": "missing",
+                "proposals": [],
+                "active_review_index": 0,
+                "updated_at": None,
+            }
+
+        try:
+            with review_state_path.open("r", encoding="utf-8") as handle:
+                state = json.load(handle)
+        except (OSError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=500, detail=f"Failed to load taxonomy review state: {error}")
+
+        proposals = state.get("proposals", [])
+        if not isinstance(proposals, list):
+            proposals = []
+
+        return {
+            "status": "loaded",
+            "proposals": proposals,
+            "active_review_index": int(state.get("active_review_index", 0) or 0),
+            "updated_at": state.get("updated_at"),
+        }
+
+    @router.put("/circuit_taxonomy/review_state")
+    def save_review_state(request: dict[str, Any]):
+        proposals = request.get("proposals", [])
+        if not isinstance(proposals, list):
+            raise HTTPException(status_code=400, detail="proposals must be a list")
+
+        active_review_index = request.get("active_review_index", 0)
+        try:
+            active_review_index = max(0, int(active_review_index))
+        except (TypeError, ValueError):
+            active_review_index = 0
+
+        state = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "active_review_index": active_review_index,
+            "proposals": proposals,
+        }
+
+        try:
+            review_state_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = review_state_path.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                json.dump(state, handle, ensure_ascii=False, indent=2)
+            tmp_path.replace(review_state_path)
+        except OSError as error:
+            raise HTTPException(status_code=500, detail=f"Failed to save taxonomy review state: {error}")
+
+        return {
+            "status": "saved",
+            "path": str(review_state_path),
+            "relative_path": str(review_state_path.relative_to(repo_root)),
+            "proposal_count": len(proposals),
+            "active_review_index": active_review_index,
+            "updated_at": state["updated_at"],
         }
 
     @router.post("/circuit_taxonomy/annotate")

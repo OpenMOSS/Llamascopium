@@ -27,8 +27,10 @@ import {
   fetchCircuitTaxonomyCircuits,
   fetchCircuitTaxonomyDirectories,
   fetchCircuitTaxonomyResumeTarget,
+  fetchCircuitTaxonomyReviewState,
   fetchFeatureByDictionaryName,
   saveCircuitTaxonomyDirectoryEvidence,
+  saveCircuitTaxonomyReviewState,
 } from "@/utils/api";
 import { normalizeZPattern } from "@/utils/activationUtils";
 import { extractFenFromText, validateFen } from "@/utils/fenUtils";
@@ -70,10 +72,12 @@ type CircuitTaxonomyReviewProposal = {
   layer?: number | null;
   featureType?: string | null;
   nodeId?: string | null;
+  originalTaxonomy?: string;
   taxonomy: string;
   confidence?: number | null;
   rationale?: string;
   evidenceSummary?: string;
+  reviewNote?: string;
   status?: CircuitTaxonomyReviewStatus;
   error?: string;
 };
@@ -88,6 +92,9 @@ const normalizeReviewProposal = (raw: unknown, index: number): CircuitTaxonomyRe
   const rawFeatureIndex = item.featureIndex ?? item.feature_index;
   const featureIndex = typeof rawFeatureIndex === "number" ? rawFeatureIndex : Number(rawFeatureIndex);
   const taxonomy = String(item.taxonomy ?? item.label ?? "").replace(/^\[|\]$/g, "").trim();
+  const originalTaxonomy = String(
+    item.originalTaxonomy ?? item.original_taxonomy ?? item.taxonomy ?? item.label ?? "",
+  ).replace(/^\[|\]$/g, "").trim();
 
   if (!dictionaryName || !Number.isFinite(featureIndex) || !taxonomy) {
     return null;
@@ -114,11 +121,13 @@ const normalizeReviewProposal = (raw: unknown, index: number): CircuitTaxonomyRe
     layer: item.layer === undefined || item.layer === null ? null : Number(item.layer),
     featureType: item.featureType ? String(item.featureType) : item.feature_type ? String(item.feature_type) : null,
     nodeId: item.nodeId ? String(item.nodeId) : item.node_id ? String(item.node_id) : null,
+    originalTaxonomy: originalTaxonomy || taxonomy,
     taxonomy,
     confidence:
       item.confidence === undefined || item.confidence === null ? null : Number(item.confidence),
     rationale: item.rationale ? String(item.rationale) : "",
     evidenceSummary: item.evidenceSummary ? String(item.evidenceSummary) : item.evidence_summary ? String(item.evidence_summary) : "",
+    reviewNote: item.reviewNote ? String(item.reviewNote) : item.review_note ? String(item.review_note) : "",
     status:
       item.status === "approved" || item.status === "rejected" || item.status === "error"
         ? item.status
@@ -302,34 +311,95 @@ export const CircuitTaxonomyAnnotation = () => {
   const [activeReviewIndex, setActiveReviewIndex] = useState(0);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewStateMessage, setReviewStateMessage] = useState<string | null>(null);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
   const pendingFeatureLoads = useRef<Map<string, Promise<Feature | null>>>(new Map());
   const pendingResumeFeatureIndexRef = useRef<number | null>(null);
+  const reviewStateLoadedRef = useRef(false);
+  const reviewStateSaveTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(TAXONOMY_REVIEW_STORAGE_KEY);
-    if (!stored) {
-      return;
-    }
+    let cancelled = false;
 
-    try {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        setReviewProposals(
-          parsed
+    const loadReviewState = async () => {
+      try {
+        const response = await fetchCircuitTaxonomyReviewState();
+        if (cancelled) {
+          return;
+        }
+
+        if (response.status === "loaded" && Array.isArray(response.proposals) && response.proposals.length > 0) {
+          const proposals = response.proposals
             .map((item, index) => normalizeReviewProposal(item, index))
-            .filter((item): item is CircuitTaxonomyReviewProposal => item !== null),
-        );
+            .filter((item): item is CircuitTaxonomyReviewProposal => item !== null);
+          setReviewProposals(proposals);
+          setActiveReviewIndex(Math.min(Math.max(response.active_review_index ?? 0, 0), Math.max(proposals.length - 1, 0)));
+          setReviewStateMessage(`Restored ${proposals.length} review items from backend.`);
+          reviewStateLoadedRef.current = true;
+          return;
+        }
+      } catch (loadError) {
+        if (!cancelled) {
+          setReviewStateMessage(loadError instanceof Error ? `Backend review restore failed: ${loadError.message}` : "Backend review restore failed.");
+        }
       }
-    } catch {
-      window.localStorage.removeItem(TAXONOMY_REVIEW_STORAGE_KEY);
-    }
+
+      const stored = window.localStorage.getItem(TAXONOMY_REVIEW_STORAGE_KEY);
+      if (!stored || cancelled) {
+        reviewStateLoadedRef.current = true;
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          const proposals = parsed
+            .map((item, index) => normalizeReviewProposal(item, index))
+            .filter((item): item is CircuitTaxonomyReviewProposal => item !== null);
+          setReviewProposals(proposals);
+          setReviewStateMessage(`Restored ${proposals.length} review items from localStorage.`);
+        }
+      } catch {
+        window.localStorage.removeItem(TAXONOMY_REVIEW_STORAGE_KEY);
+      } finally {
+        reviewStateLoadedRef.current = true;
+      }
+    };
+
+    void loadReviewState();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     window.localStorage.setItem(TAXONOMY_REVIEW_STORAGE_KEY, JSON.stringify(reviewProposals));
-  }, [reviewProposals]);
+
+    if (!reviewStateLoadedRef.current) {
+      return;
+    }
+
+    if (reviewStateSaveTimerRef.current) {
+      window.clearTimeout(reviewStateSaveTimerRef.current);
+    }
+
+    reviewStateSaveTimerRef.current = window.setTimeout(() => {
+      void saveCircuitTaxonomyReviewState(reviewProposals, activeReviewIndex)
+        .then((response) => {
+          setReviewStateMessage(`Saved ${response.proposal_count ?? reviewProposals.length} review items to backend.`);
+        })
+        .catch((saveError) => {
+          setReviewStateMessage(saveError instanceof Error ? `Backend review save failed: ${saveError.message}` : "Backend review save failed.");
+        });
+    }, 600);
+
+    return () => {
+      if (reviewStateSaveTimerRef.current) {
+        window.clearTimeout(reviewStateSaveTimerRef.current);
+      }
+    };
+  }, [activeReviewIndex, reviewProposals]);
 
   useEffect(() => {
     let cancelled = false;
@@ -419,8 +489,10 @@ export const CircuitTaxonomyAnnotation = () => {
     () => ({
       pending: reviewProposals.filter((item) => (item.status ?? "pending") === "pending").length,
       approved: reviewProposals.filter((item) => item.status === "approved").length,
-      rejected: reviewProposals.filter((item) => item.status === "rejected").length,
       error: reviewProposals.filter((item) => item.status === "error").length,
+      edited: reviewProposals.filter(
+        (item) => item.originalTaxonomy && item.taxonomy && item.originalTaxonomy !== item.taxonomy,
+      ).length,
     }),
     [reviewProposals],
   );
@@ -571,6 +643,11 @@ export const CircuitTaxonomyAnnotation = () => {
   }, [circuitDetail, currentFeatureIndex, ensureFeatureLoaded]);
 
   const currentFeature = currentFeatureRef ? featureCache[getFeatureCacheKey(currentFeatureRef)] ?? null : null;
+  const currentFeatureMatchesActiveReview =
+    !!activeReviewProposal &&
+    !!currentFeatureRef &&
+    currentFeatureRef.dictionary_name === activeReviewProposal.dictionaryName &&
+    currentFeatureRef.feature_index === activeReviewProposal.featureIndex;
 
   useEffect(() => {
     setSelectedTaxonomy(extractTaxonomyPrefix(currentFeature?.interpretation?.text));
@@ -740,7 +817,9 @@ export const CircuitTaxonomyAnnotation = () => {
       );
       if (nextIndex >= 0) {
         setActiveReviewIndex(nextIndex);
+        return { proposal: reviewProposals[nextIndex], index: nextIndex };
       }
+      return null;
     },
     [reviewProposals],
   );
@@ -788,6 +867,7 @@ export const CircuitTaxonomyAnnotation = () => {
       layer: currentFeatureRef.layer,
       featureType: currentFeatureRef.feature_type,
       nodeId: currentFeatureRef.node_id,
+      originalTaxonomy: selectedTaxonomy || extractTaxonomyPrefix(currentFeature?.interpretation?.text) || "Uninterpretable",
       taxonomy: selectedTaxonomy || extractTaxonomyPrefix(currentFeature?.interpretation?.text) || "Uninterpretable",
       confidence: null,
       rationale: "Manual review item created from the current feature.",
@@ -874,6 +954,68 @@ export const CircuitTaxonomyAnnotation = () => {
     [circuitDetail, ensureFeatureLoaded, selectedDirectoryId, updateReviewProposal],
   );
 
+  const handleChangeActiveReviewTaxonomy = useCallback(
+    (taxonomy: string) => {
+      if (!activeReviewProposal) {
+        return;
+      }
+      updateReviewProposal(activeReviewProposal.id, {
+        originalTaxonomy: activeReviewProposal.originalTaxonomy ?? activeReviewProposal.taxonomy,
+        taxonomy,
+        status: activeReviewProposal.status === "approved" ? "pending" : activeReviewProposal.status,
+        error: undefined,
+      });
+      setSelectedTaxonomy(taxonomy);
+    },
+    [activeReviewProposal, updateReviewProposal],
+  );
+
+  const handleDownloadReviewEdits = useCallback(() => {
+    const editedProposals = reviewProposals.filter(
+      (proposal) =>
+        proposal.originalTaxonomy &&
+        proposal.taxonomy &&
+        proposal.originalTaxonomy !== proposal.taxonomy,
+    );
+
+    if (editedProposals.length === 0) {
+      window.alert("No edited taxonomy labels to download.");
+      return;
+    }
+
+    const lines = editedProposals.map((proposal) =>
+      JSON.stringify({
+        id: proposal.id,
+        directory_id: proposal.directoryId,
+        file_name: proposal.fileName,
+        circuit_index: proposal.circuitIndex,
+        feature_index_in_circuit: proposal.featureIndexInCircuit,
+        dictionary_name: proposal.dictionaryName,
+        feature_index: proposal.featureIndex,
+        layer: proposal.layer,
+        feature_type: proposal.featureType,
+        node_id: proposal.nodeId,
+        original_taxonomy: proposal.originalTaxonomy,
+        reviewed_taxonomy: proposal.taxonomy,
+        status: proposal.status ?? "pending",
+        confidence: proposal.confidence ?? null,
+        rationale: proposal.rationale ?? "",
+        evidence_summary: proposal.evidenceSummary ?? "",
+        review_note: proposal.reviewNote ?? "",
+      }),
+    );
+
+    const blob = new Blob([`${lines.join("\n")}\n`], { type: "application/x-ndjson" });
+    const objectUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = "circuit-taxonomy-review-edits.jsonl";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(objectUrl);
+  }, [reviewProposals]);
+
   const handleApproveReviewProposal = useCallback(async () => {
     if (!activeReviewProposal) {
       return;
@@ -914,7 +1056,10 @@ export const CircuitTaxonomyAnnotation = () => {
         status: "approved",
         error: undefined,
       });
-      moveToNextPendingReview(activeReviewIndex);
+      const nextReview = moveToNextPendingReview(activeReviewIndex);
+      if (nextReview) {
+        await handleSelectReviewProposal(nextReview.proposal, nextReview.index);
+      }
     } catch (approveError) {
       const message = approveError instanceof Error ? approveError.message : "Failed to approve proposal.";
       setReviewError(message);
@@ -926,18 +1071,11 @@ export const CircuitTaxonomyAnnotation = () => {
     activeReviewIndex,
     activeReviewProposal,
     currentFeatureRef,
+    handleSelectReviewProposal,
     moveToNextPendingReview,
     refreshFeature,
     updateReviewProposal,
   ]);
-
-  const handleRejectReviewProposal = useCallback(() => {
-    if (!activeReviewProposal) {
-      return;
-    }
-    updateReviewProposal(activeReviewProposal.id, { status: "rejected", error: undefined });
-    moveToNextPendingReview(activeReviewIndex);
-  }, [activeReviewIndex, activeReviewProposal, moveToNextPendingReview, updateReviewProposal]);
 
   const handleClearCompletedReviewProposals = useCallback(() => {
     setReviewProposals((prev) => prev.filter((proposal) => (proposal.status ?? "pending") === "pending"));
@@ -1301,8 +1439,8 @@ const handleExportEvidence = useCallback(async () => {
                 <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
                   <span>Pending: {reviewCounts.pending}</span>
                   <span>Approved: {reviewCounts.approved}</span>
-                  <span>Rejected: {reviewCounts.rejected}</span>
                   <span>Errors: {reviewCounts.error}</span>
+                  <span>Edited: {reviewCounts.edited}</span>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -1315,16 +1453,38 @@ const handleExportEvidence = useCallback(async () => {
                   </Button>
                   <Button
                     variant="outline"
+                    onClick={() => activeReviewProposal && void handleSelectReviewProposal(activeReviewProposal, activeReviewIndex)}
+                    disabled={!activeReviewProposal}
+                  >
+                    Jump To Feature
+                  </Button>
+                  <Button onClick={handleApproveReviewProposal} disabled={!activeReviewProposal || reviewSaving}>
+                    {reviewSaving ? "Approving..." : "Approve And Save"}
+                  </Button>
+                  <Button
+                    variant="outline"
                     onClick={handleClearCompletedReviewProposals}
                     disabled={reviewProposals.length === 0}
                   >
                     Clear Completed
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleDownloadReviewEdits}
+                    disabled={reviewCounts.edited === 0}
+                  >
+                    Download Review Edits
                   </Button>
                 </div>
 
                 {reviewError && (
                   <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
                     {reviewError}
+                  </div>
+                )}
+                {reviewStateMessage && (
+                  <div className="rounded-md border bg-slate-50 p-3 text-sm text-muted-foreground">
+                    {reviewStateMessage}
                   </div>
                 )}
 
@@ -1355,6 +1515,9 @@ const handleExportEvidence = useCallback(async () => {
                           {proposal.fileName ?? "current circuit"}{" "}
                           {proposal.confidence !== null && proposal.confidence !== undefined
                             ? `| confidence ${proposal.confidence.toFixed(2)}`
+                            : ""}
+                          {proposal.originalTaxonomy && proposal.originalTaxonomy !== proposal.taxonomy
+                            ? ` | ${proposal.originalTaxonomy} -> ${proposal.taxonomy}`
                             : ""}
                         </div>
                       </button>
@@ -1392,6 +1555,34 @@ const handleExportEvidence = useCallback(async () => {
                     </div>
 
                     <div className="grid gap-2">
+                      <div className="grid gap-2 rounded-md border bg-slate-50 p-3 text-sm sm:grid-cols-2">
+                        <div>
+                          <div className="text-xs font-medium text-muted-foreground">Original Review Label</div>
+                          <div className="mt-1 font-semibold">
+                            {activeReviewProposal.originalTaxonomy ?? activeReviewProposal.taxonomy}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-medium text-muted-foreground">Reviewed Label</div>
+                          <div className="mt-1 font-semibold">{activeReviewProposal.taxonomy}</div>
+                        </div>
+                      </div>
+                      <div className="text-sm font-medium">Set Reviewed Label</div>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                        {taxonomyLabels.map((label) => (
+                          <Button
+                            key={label}
+                            type="button"
+                            variant={activeReviewProposal.taxonomy === label ? "default" : "outline"}
+                            onClick={() => handleChangeActiveReviewTaxonomy(label)}
+                          >
+                            {label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2">
                       <div className="text-sm font-medium">Rationale</div>
                       <div className="min-h-[96px] whitespace-pre-wrap rounded-md border bg-slate-50 p-3 text-sm">
                         {activeReviewProposal.rationale || "No rationale provided."}
@@ -1405,26 +1596,39 @@ const handleExportEvidence = useCallback(async () => {
                       </div>
                     </div>
 
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">Review Note</div>
+                      <Textarea
+                        value={activeReviewProposal.reviewNote ?? ""}
+                        onChange={(event) =>
+                          updateReviewProposal(activeReviewProposal.id, {
+                            reviewNote: event.target.value,
+                          })
+                        }
+                        placeholder="Optional note about why you changed or accepted this label."
+                        className="min-h-[88px] text-sm"
+                      />
+                    </div>
+
+                    <div className="grid gap-2">
+                      <div className="text-sm font-medium">Top Activation Samples</div>
+                      <div className="rounded-md border p-3">
+                        {currentFeatureMatchesActiveReview && currentFeature && topActivationGroup ? (
+                          <CircuitTaxonomyTopActivationBoards sampleGroup={topActivationGroup} />
+                        ) : (
+                          <div className="text-sm text-muted-foreground">
+                            Click Jump To Feature if samples are not loaded for this proposal yet.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
                     {activeReviewProposal.error && (
                       <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
                         {activeReviewProposal.error}
                       </div>
                     )}
 
-                    <div className="flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => void handleSelectReviewProposal(activeReviewProposal, activeReviewIndex)}
-                      >
-                        Jump To Feature
-                      </Button>
-                      <Button onClick={handleApproveReviewProposal} disabled={reviewSaving}>
-                        {reviewSaving ? "Approving..." : "Approve And Save"}
-                      </Button>
-                      <Button variant="outline" onClick={handleRejectReviewProposal} disabled={reviewSaving}>
-                        Reject
-                      </Button>
-                    </div>
                   </>
                 ) : (
                   <div className="text-sm text-muted-foreground">Select a proposal to review.</div>
