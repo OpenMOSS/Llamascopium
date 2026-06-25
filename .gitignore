@@ -229,6 +229,7 @@ restore_meta.py
 
 # Circuit taxonomy local artifacts
 /outputs/circuit_taxonomy/
+/outputs/circuit_taxonomy_evidence/
 /outputs/circuit_taxonomy_reviews/
 /scripts/circuit_taxonomy/
 !/scripts/circuit_taxonomy/README.md
