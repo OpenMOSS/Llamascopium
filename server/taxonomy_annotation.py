@@ -958,6 +958,23 @@ def get_circuit_taxonomy_router(
             "saved_at": snapshot_state["saved_at"],
         }
 
+    @router.post("/circuit_taxonomy/review_state/reset")
+    def reset_review_state():
+        try:
+            state = coerce_review_state({"proposals": [], "active_review_index": 0})
+            write_review_state(review_state_path, state)
+        except OSError as error:
+            raise HTTPException(status_code=500, detail=f"Failed to reset taxonomy review state: {error}")
+
+        return {
+            "status": "reset",
+            "path": str(review_state_path),
+            "relative_path": str(review_state_path.relative_to(repo_root)),
+            "proposal_count": 0,
+            "active_review_index": 0,
+            "updated_at": state["updated_at"],
+        }
+
     def annotate_feature_item(dictionary_name: str, feature_index: int, taxonomy: str, overwrite: bool) -> dict[str, Any]:
         try:
             feature_index = int(feature_index)

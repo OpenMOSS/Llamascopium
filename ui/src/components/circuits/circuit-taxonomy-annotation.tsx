@@ -30,6 +30,7 @@ import {
   fetchCircuitTaxonomyResumeTarget,
   fetchCircuitTaxonomyReviewState,
   fetchFeatureByDictionaryName,
+  resetCircuitTaxonomyReviewState,
   saveAllCircuitTaxonomyEvidence,
   saveCircuitTaxonomyReviewState,
   snapshotCircuitTaxonomyReviewState,
@@ -334,7 +335,9 @@ export const CircuitTaxonomyAnnotation = () => {
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewBatchSaving, setReviewBatchSaving] = useState(false);
   const [reviewSnapshotSaving, setReviewSnapshotSaving] = useState(false);
+  const [reviewResetting, setReviewResetting] = useState(false);
   const [reviewStateMessage, setReviewStateMessage] = useState<string | null>(null);
+  const [reviewSnapshotAwaitingChoice, setReviewSnapshotAwaitingChoice] = useState(false);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
   const pendingFeatureLoads = useRef<Map<string, Promise<Feature | null>>>(new Map());
@@ -873,6 +876,7 @@ export const CircuitTaxonomyAnnotation = () => {
         }
         return next;
       });
+      setReviewSnapshotAwaitingChoice(false);
       if (parsed.activeReviewIndex !== undefined) {
         setActiveReviewIndex(Math.min(Math.max(parsed.activeReviewIndex, 0), Math.max(parsed.proposals.length - 1, 0)));
       } else {
@@ -913,6 +917,7 @@ export const CircuitTaxonomyAnnotation = () => {
           return next;
         });
         setActiveReviewIndex((prev) => (reviewProposals.length === 0 ? 0 : prev));
+        setReviewSnapshotAwaitingChoice(false);
         setReviewStateMessage(`Imported ${imported.length} review items from ${files.length} file(s).`);
       } catch (importError) {
         setReviewError(importError instanceof Error ? importError.message : "Failed to parse review proposal files.");
@@ -934,14 +939,44 @@ export const CircuitTaxonomyAnnotation = () => {
       setReviewStateMessage(
         `Saved permanent review snapshot (${response.proposal_count ?? reviewProposals.length} items) to ${
           response.snapshot_relative_path ?? response.relative_path ?? "backend"
-        }. Continuing from the working review-state copy.`,
+        }. Choose whether to continue from this review-state or start a blank one.`,
       );
+      setReviewSnapshotAwaitingChoice(true);
     } catch (snapshotError) {
       setReviewError(snapshotError instanceof Error ? snapshotError.message : "Failed to save review snapshot.");
     } finally {
       setReviewSnapshotSaving(false);
     }
   }, [activeReviewIndex, reviewProposals]);
+
+  const handleContinueReviewState = useCallback(() => {
+    setReviewSnapshotAwaitingChoice(false);
+    setReviewStateMessage(`Continuing from the current review-state copy (${reviewProposals.length} items).`);
+  }, [reviewProposals.length]);
+
+  const handleStartBlankReviewState = useCallback(async () => {
+    if (reviewStateSaveTimerRef.current) {
+      window.clearTimeout(reviewStateSaveTimerRef.current);
+      reviewStateSaveTimerRef.current = null;
+    }
+
+    setReviewResetting(true);
+    setReviewError(null);
+    try {
+      const response = await resetCircuitTaxonomyReviewState();
+      setReviewProposals([]);
+      setActiveReviewIndex(0);
+      window.localStorage.removeItem(TAXONOMY_REVIEW_STORAGE_KEY);
+      setReviewSnapshotAwaitingChoice(false);
+      setReviewStateMessage(
+        `Started a blank review-state at ${response.relative_path ?? "backend"}. Import a new LLM proposal to continue.`,
+      );
+    } catch (resetError) {
+      setReviewError(resetError instanceof Error ? resetError.message : "Failed to reset review state.");
+    } finally {
+      setReviewResetting(false);
+    }
+  }, []);
 
   const handleAddCurrentFeatureToReview = useCallback(() => {
     if (!currentFeatureRef || !circuitDetail) {
@@ -973,6 +1008,7 @@ export const CircuitTaxonomyAnnotation = () => {
       }
       return [...prev, proposal];
     });
+    setReviewSnapshotAwaitingChoice(false);
     setActiveReviewIndex(reviewProposals.length);
   }, [
     circuitDetail,
@@ -1680,8 +1716,28 @@ const handleExportEvidence = useCallback(async () => {
                   </div>
                 )}
                 {reviewStateMessage && (
-                  <div className="rounded-md border bg-slate-50 p-3 text-sm text-muted-foreground">
-                    {reviewStateMessage}
+                  <div className="space-y-3 rounded-md border bg-slate-50 p-3 text-sm text-muted-foreground">
+                    <div>{reviewStateMessage}</div>
+                    {reviewSnapshotAwaitingChoice && (
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={handleContinueReviewState}
+                          disabled={reviewResetting}
+                        >
+                          Continue Current Review State
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleStartBlankReviewState()}
+                          disabled={reviewResetting}
+                        >
+                          {reviewResetting ? "Starting Blank..." : "Start Blank Review State"}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
 

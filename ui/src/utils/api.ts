@@ -326,7 +326,7 @@ export interface CircuitTaxonomyBatchAnnotateResponse {
 }
 
 export interface CircuitTaxonomyReviewStateResponse {
-  status: "missing" | "loaded" | "saved" | "snapshot_saved";
+  status: "missing" | "loaded" | "saved" | "snapshot_saved" | "reset";
   proposals?: unknown[];
   active_review_index: number;
   updated_at: string | null;
@@ -560,6 +560,17 @@ export const snapshotCircuitTaxonomyReviewState = async (
       proposals,
       active_review_index: activeReviewIndex,
     }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const resetCircuitTaxonomyReviewState = async (): Promise<CircuitTaxonomyReviewStateResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/review_state/reset`, {
+    method: "POST",
   });
 
   if (!response.ok) {
