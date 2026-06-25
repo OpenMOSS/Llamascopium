@@ -32,6 +32,7 @@ import {
   fetchFeatureByDictionaryName,
   saveAllCircuitTaxonomyEvidence,
   saveCircuitTaxonomyReviewState,
+  snapshotCircuitTaxonomyReviewState,
 } from "@/utils/api";
 import { normalizeZPattern } from "@/utils/activationUtils";
 import { extractFenFromText, validateFen } from "@/utils/fenUtils";
@@ -332,6 +333,7 @@ export const CircuitTaxonomyAnnotation = () => {
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewBatchSaving, setReviewBatchSaving] = useState(false);
+  const [reviewSnapshotSaving, setReviewSnapshotSaving] = useState(false);
   const [reviewStateMessage, setReviewStateMessage] = useState<string | null>(null);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
@@ -918,6 +920,28 @@ export const CircuitTaxonomyAnnotation = () => {
     },
     [reviewProposals.length],
   );
+
+  const handleSnapshotReviewState = useCallback(async () => {
+    if (reviewStateSaveTimerRef.current) {
+      window.clearTimeout(reviewStateSaveTimerRef.current);
+      reviewStateSaveTimerRef.current = null;
+    }
+
+    setReviewSnapshotSaving(true);
+    setReviewError(null);
+    try {
+      const response = await snapshotCircuitTaxonomyReviewState(reviewProposals, activeReviewIndex);
+      setReviewStateMessage(
+        `Saved permanent review snapshot (${response.proposal_count ?? reviewProposals.length} items) to ${
+          response.snapshot_relative_path ?? response.relative_path ?? "backend"
+        }. Continuing from the working review-state copy.`,
+      );
+    } catch (snapshotError) {
+      setReviewError(snapshotError instanceof Error ? snapshotError.message : "Failed to save review snapshot.");
+    } finally {
+      setReviewSnapshotSaving(false);
+    }
+  }, [activeReviewIndex, reviewProposals]);
 
   const handleAddCurrentFeatureToReview = useCallback(() => {
     if (!currentFeatureRef || !circuitDetail) {
@@ -1640,6 +1664,13 @@ const handleExportEvidence = useCallback(async () => {
                     disabled={reviewCounts.edited === 0}
                   >
                     Download Review Edits
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleSnapshotReviewState()}
+                    disabled={reviewProposals.length === 0 || reviewSnapshotSaving}
+                  >
+                    {reviewSnapshotSaving ? "Saving Snapshot..." : "Save Review State"}
                   </Button>
                 </div>
 

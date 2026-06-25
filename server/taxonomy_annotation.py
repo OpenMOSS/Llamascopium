@@ -46,6 +46,7 @@ def get_circuit_taxonomy_router(
     router = APIRouter()
     evidence_output_dir = repo_root / "outputs" / "circuit_taxonomy_evidence"
     review_state_path = repo_root / "outputs" / "circuit_taxonomy_reviews" / "review-state.json"
+    review_state_snapshot_dir = review_state_path.parent / "saved"
 
     def list_directory_options() -> list[dict[str, str]]:
         options: list[dict[str, str]] = []
@@ -623,6 +624,31 @@ def get_circuit_taxonomy_router(
             content += "\n"
         return content
 
+    def coerce_review_state(request: dict[str, Any] | None = None) -> dict[str, Any]:
+        request = request or {}
+        proposals = request.get("proposals", [])
+        if not isinstance(proposals, list):
+            raise HTTPException(status_code=400, detail="proposals must be a list")
+
+        active_review_index = request.get("active_review_index", 0)
+        try:
+            active_review_index = max(0, int(active_review_index))
+        except (TypeError, ValueError):
+            active_review_index = 0
+
+        return {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "active_review_index": active_review_index,
+            "proposals": proposals,
+        }
+
+    def write_review_state(path: Path, state: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, ensure_ascii=False, indent=2)
+        tmp_path.replace(path)
+
     @router.get("/circuit_taxonomy/directories")
     def list_directories():
         return {
@@ -883,28 +909,9 @@ def get_circuit_taxonomy_router(
 
     @router.put("/circuit_taxonomy/review_state")
     def save_review_state(request: dict[str, Any]):
-        proposals = request.get("proposals", [])
-        if not isinstance(proposals, list):
-            raise HTTPException(status_code=400, detail="proposals must be a list")
-
-        active_review_index = request.get("active_review_index", 0)
         try:
-            active_review_index = max(0, int(active_review_index))
-        except (TypeError, ValueError):
-            active_review_index = 0
-
-        state = {
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "active_review_index": active_review_index,
-            "proposals": proposals,
-        }
-
-        try:
-            review_state_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = review_state_path.with_suffix(".tmp")
-            with tmp_path.open("w", encoding="utf-8") as handle:
-                json.dump(state, handle, ensure_ascii=False, indent=2)
-            tmp_path.replace(review_state_path)
+            state = coerce_review_state(request)
+            write_review_state(review_state_path, state)
         except OSError as error:
             raise HTTPException(status_code=500, detail=f"Failed to save taxonomy review state: {error}")
 
@@ -912,9 +919,43 @@ def get_circuit_taxonomy_router(
             "status": "saved",
             "path": str(review_state_path),
             "relative_path": str(review_state_path.relative_to(repo_root)),
-            "proposal_count": len(proposals),
-            "active_review_index": active_review_index,
+            "proposal_count": len(state["proposals"]),
+            "active_review_index": state["active_review_index"],
             "updated_at": state["updated_at"],
+        }
+
+    @router.post("/circuit_taxonomy/review_state/snapshot")
+    def snapshot_review_state(request: dict[str, Any] | None = None):
+        try:
+            state = coerce_review_state(request)
+            write_review_state(review_state_path, state)
+
+            saved_at = datetime.now(timezone.utc)
+            timestamp = saved_at.strftime("%Y%m%dT%H%M%SZ")
+            snapshot_state = {
+                **state,
+                "saved_at": saved_at.isoformat(),
+                "source_path": str(review_state_path.relative_to(repo_root)),
+            }
+            snapshot_path = review_state_snapshot_dir / f"review-state-{timestamp}.json"
+            suffix = 1
+            while snapshot_path.exists():
+                snapshot_path = review_state_snapshot_dir / f"review-state-{timestamp}-{suffix}.json"
+                suffix += 1
+            write_review_state(snapshot_path, snapshot_state)
+        except OSError as error:
+            raise HTTPException(status_code=500, detail=f"Failed to snapshot taxonomy review state: {error}")
+
+        return {
+            "status": "snapshot_saved",
+            "path": str(review_state_path),
+            "relative_path": str(review_state_path.relative_to(repo_root)),
+            "snapshot_path": str(snapshot_path),
+            "snapshot_relative_path": str(snapshot_path.relative_to(repo_root)),
+            "proposal_count": len(state["proposals"]),
+            "active_review_index": state["active_review_index"],
+            "updated_at": state["updated_at"],
+            "saved_at": snapshot_state["saved_at"],
         }
 
     def annotate_feature_item(dictionary_name: str, feature_index: int, taxonomy: str, overwrite: bool) -> dict[str, Any]:

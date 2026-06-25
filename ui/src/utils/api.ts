@@ -326,12 +326,15 @@ export interface CircuitTaxonomyBatchAnnotateResponse {
 }
 
 export interface CircuitTaxonomyReviewStateResponse {
-  status: "missing" | "loaded" | "saved";
-  proposals: unknown[];
+  status: "missing" | "loaded" | "saved" | "snapshot_saved";
+  proposals?: unknown[];
   active_review_index: number;
   updated_at: string | null;
   relative_path?: string;
   proposal_count?: number;
+  saved_at?: string;
+  snapshot_path?: string;
+  snapshot_relative_path?: string;
 }
 
 export const fetchCircuitTaxonomyDirectories = async (): Promise<{
@@ -529,6 +532,27 @@ export const saveCircuitTaxonomyReviewState = async (
 ): Promise<CircuitTaxonomyReviewStateResponse> => {
   const response = await fetch(`${API_BASE}/circuit_taxonomy/review_state`, {
     method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      proposals,
+      active_review_index: activeReviewIndex,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const snapshotCircuitTaxonomyReviewState = async (
+  proposals: unknown[],
+  activeReviewIndex: number,
+): Promise<CircuitTaxonomyReviewStateResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/review_state/snapshot`, {
+    method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
