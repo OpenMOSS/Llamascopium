@@ -164,6 +164,22 @@ const getZPatternTargets = (sourceSquare: number, zPatternIndices?: number[][], 
     .slice(0, 8);
 };
 
+const getZPatternSourceSquares = (zPatternIndices?: number[][], zPatternValues?: number[]) => {
+  const sources = new Set<number>();
+  if (!zPatternIndices || !zPatternValues) return sources;
+
+  const looksLikePairList = Array.isArray(zPatternIndices[0]) && (zPatternIndices[0] as number[]).length === 2;
+  if (looksLikePairList) {
+    for (const pair of zPatternIndices) {
+      if (Array.isArray(pair) && pair.length >= 2) sources.add(Number(pair[0]));
+    }
+  } else if (zPatternIndices.length >= 2) {
+    const sourceList = zPatternIndices[0] as number[];
+    for (const source of sourceList) sources.add(Number(source));
+  }
+  return sources;
+};
+
 // Parse chess move string
 const parseMove = (move: string) => {
   if (!move || move.length < 4) return null;
@@ -529,6 +545,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
 
   // Z-pattern targets for hovered square
   const zPatternTargets = hoveredSquare !== null ? getZPatternTargets(hoveredSquare, zPatternIndices, zPatternValues) : [];
+  const zPatternSourceSquares = getZPatternSourceSquares(zPatternIndices, zPatternValues);
 
   // Forward inference moves for arrows
   const forwardMoves = useMemo(() => {
@@ -583,6 +600,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
               const activationIndex = getActivationIndex(displayRowIndex, colIndex);
               const activation = activations?.[activationIndex] || 0;
               const activationColor = getActivationColor(activation, maxAbsActivation);
+              const hasZPatternSource = zPatternSourceSquares.has(activationIndex);
               
               const isZPatternTarget = zPatternTargets.some(target => target.square === activationIndex);
               const targetStrength = zPatternTargets.find(target => target.square === activationIndex)?.strength || 0;
@@ -625,7 +643,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                     relative flex items-center justify-center
                     ${baseColor}
                     transition-all duration-200 hover:brightness-110
-                    ${activation !== 0 ? 'cursor-pointer' : ''}
+                    ${activation !== 0 || hasZPatternSource ? 'cursor-pointer' : ''}
                     ${isInteractive ? 'cursor-pointer' : ''}
                     ${isSelectedSquare ? 'ring-2 ring-blue-500 ring-opacity-75' : ''}
                   `}
@@ -633,7 +651,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
                     backgroundColor: finalBackgroundColor,
                   }}
                   onMouseEnter={() => {
-                    if (activation !== 0) {
+                    if (activation !== 0 || hasZPatternSource) {
                       setHoveredSquare(activationIndex);
                     }
                   }}

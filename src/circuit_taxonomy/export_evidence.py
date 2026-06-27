@@ -61,10 +61,15 @@ def make_serializable(obj: Any) -> Any:
     return obj
 
 
-def board_index_to_square(index: int) -> str:
+def board_index_to_square(index: int, side_to_move: str | None = None) -> str:
     if index < 0 or index > 63:
         return f"idx{index}"
-    return f"{'abcdefgh'[index % 8]}{8 - (index // 8)}"
+    file_name = "abcdefgh"[index % 8]
+    if side_to_move == "w":
+        rank = 1 + (index // 8)
+    else:
+        rank = 8 - (index // 8)
+    return f"{file_name}{rank}"
 
 
 def extract_fen(value: Any) -> str | None:
@@ -177,7 +182,7 @@ def parse_features(payload: dict[str, Any]) -> list[dict[str, Any]]:
     )
 
 
-def top_square_entries(indices: Any, values: Any, limit: int) -> list[dict[str, Any]]:
+def top_square_entries(indices: Any, values: Any, limit: int, side_to_move: str | None = None) -> list[dict[str, Any]]:
     if indices is None or values is None:
         return []
     index_values: list[tuple[int, float]] = []
@@ -193,14 +198,19 @@ def top_square_entries(indices: Any, values: Any, limit: int) -> list[dict[str, 
     return [
         {
             "index": index,
-            "square": board_index_to_square(index),
+            "square": board_index_to_square(index, side_to_move),
             "value": round(value, 6),
         }
         for index, value in index_values[:limit]
     ]
 
 
-def top_z_pairs(z_pattern_indices: Any, z_pattern_values: Any, limit: int) -> list[dict[str, Any]]:
+def top_z_pairs(
+    z_pattern_indices: Any,
+    z_pattern_values: Any,
+    limit: int,
+    side_to_move: str | None = None,
+) -> list[dict[str, Any]]:
     if z_pattern_indices is None or z_pattern_values is None:
         return []
     indices = np.asarray(z_pattern_indices)
@@ -228,10 +238,8 @@ def top_z_pairs(z_pattern_indices: Any, z_pattern_values: Any, limit: int) -> li
     pairs.sort(key=lambda item: abs(item[2]), reverse=True)
     return [
         {
-            "source_index": source,
-            "source_square": board_index_to_square(source),
-            "target_index": target,
-            "target_square": board_index_to_square(target),
+            "source_square": board_index_to_square(source, side_to_move),
+            "target_square": board_index_to_square(target, side_to_move),
             "value": round(value, 6),
         }
         for source, target, value in pairs[:limit]
@@ -344,23 +352,16 @@ class EvidenceExporter:
                         "current_player_win": wdl[0],
                         "draw": wdl[1],
                         "current_player_loss": wdl[2],
-                        "raw": wdl,
                     }
-                    summary["wdl_value"] = float(wdl[0] - wdl[2])
-                    summary["value"] = summary["wdl_value"]
+                    summary["value"] = float(wdl[0] - wdl[2])
 
             legal_moves = get_move_from_model(model, fen, return_list=True)
             if isinstance(legal_moves, list) and legal_moves:
-                legal_logits = torch.tensor([entry[1] for entry in legal_moves], dtype=torch.float32)
-                legal_probs = torch.softmax(legal_logits - legal_logits.max(), dim=0).tolist()
                 summary["top_moves"] = [
                     {
                         "uci": uci,
-                        "logit": round(logit, 6),
-                        "prob": round(float(prob), 6),
-                        "idx": None,
                     }
-                    for (uci, logit), prob in zip(legal_moves[:5], legal_probs[:5])
+                    for uci, _ in legal_moves[:5]
                 ]
             else:
                 summary["top_moves"] = []
@@ -389,7 +390,7 @@ class EvidenceExporter:
     ) -> dict[str, Any]:
         dictionary_name = str(feature_ref.get("dictionary_name", "")).strip()
         feature_index = int(feature_ref.get("feature_index", -1))
-        feature, resolved_series = self.get_feature_with_series(dictionary_name, feature_index)
+        feature, _resolved_series = self.get_feature_with_series(dictionary_name, feature_index)
         if feature is None:
             raise ValueError(f"Feature {feature_index} not found in SAE {dictionary_name}/{self.sae_series}")
 
@@ -407,7 +408,6 @@ class EvidenceExporter:
                     dataset_index = int(sample_id)
                     context_idx = sampling.context_idx[dataset_index] if dataset_index < len(sampling.context_idx) else None
                     dataset_name = sampling.dataset_name[dataset_index] if dataset_index < len(sampling.dataset_name) else None
-                    model_name = sampling.model_name[dataset_index] if dataset_index < len(sampling.model_name) else None
                     shard_idx = (
                         int(sampling.shard_idx[dataset_index])
                         if sampling.shard_idx is not None and dataset_index < len(sampling.shard_idx)
@@ -430,29 +430,31 @@ class EvidenceExporter:
                             dataset_row = {"error": f"Failed to load dataset row: {dataset_error}"}
 
                     model_summary = self.get_board_model_summary(fen) if fen else {}
+                    side_to_move = fen.split()[1] if fen and len(fen.split()) >= 2 else None
                     sample_summaries.append(
                         {
-                            "sample_index": dataset_index,
-                            "context_idx": int(context_idx) if context_idx is not None else None,
-                            "dataset_name": dataset_name,
-                            "model_name": model_name,
                             "fen": fen,
-                            "side_to_move": fen.split()[1] if fen and len(fen.split()) >= 2 else None,
                             "wdl": model_summary.get("wdl"),
-                            "wdl_value": model_summary.get("wdl_value"),
                             "value": model_summary.get("value"),
                             "top_moves": model_summary.get("top_moves", []),
-                            "model_analysis_error": model_summary.get("model_analysis_error"),
-                            "top_activated_squares": top_square_entries(act_indices, act_values, top_squares),
-                            "top_z_pairs": top_z_pairs(z_indices, z_values, top_z),
-                            "signals": compact_signals(dataset_row),
+                            "top_activated_squares": top_square_entries(
+                                act_indices,
+                                act_values,
+                                top_squares,
+                                side_to_move,
+                            ),
+                            "top_z_pairs": top_z_pairs(
+                                z_indices,
+                                z_values,
+                                top_z,
+                                side_to_move,
+                            ),
                         }
                     )
                 if len(sample_summaries) >= max_samples:
                     break
 
         interpretation = feature.interpretation if isinstance(feature.interpretation, dict) else {}
-        metadata = circuit_detail.get("metadata", {}) if isinstance(circuit_detail.get("metadata"), dict) else {}
         return {
             "directory_id": directory_id,
             "file_name": circuit_detail.get("file_name"),
@@ -460,22 +462,12 @@ class EvidenceExporter:
             "feature_index_in_circuit": feature_index_in_circuit,
             "dictionary_name": dictionary_name,
             "feature_index": feature_index,
-            "sae_series": resolved_series,
             "layer": feature_ref.get("layer"),
             "feature_type": feature_ref.get("feature_type"),
             "node_id": feature_ref.get("node_id"),
             "label": feature_ref.get("label"),
             "existing_interpretation": str(interpretation.get("text", "") or ""),
-            "circuit_metadata": {
-                "prompt": metadata.get("prompt"),
-                "target_move": metadata.get("target_move"),
-                "predicted_move_uci": metadata.get("predicted_move_uci"),
-                "logit_moves": metadata.get("logit_moves"),
-                "lorsa_analysis_name": metadata.get("lorsa_analysis_name"),
-                "tc_analysis_name": metadata.get("tc_analysis_name") or metadata.get("clt_analysis_name"),
-            },
             "feature_stats": {
-                "analysis_name": analysis.name if analysis is not None else None,
                 "max_feature_act": analysis.max_feature_acts if analysis is not None else None,
                 "act_times": analysis.act_times if analysis is not None else None,
                 "n_analyzed_tokens": analysis.n_analyzed_tokens if analysis is not None else None,
@@ -512,12 +504,8 @@ def evidence_file_has_model_summary(path: Path, max_items: int = 20) -> bool:
                         continue
                     if sample.get("wdl") is not None:
                         return True
-                    if sample.get("wdl_value") is not None:
-                        return True
                     top_moves = sample.get("top_moves")
                     if isinstance(top_moves, list) and len(top_moves) > 0:
-                        return True
-                    if sample.get("model_analysis_error"):
                         return True
     except (OSError, json.JSONDecodeError):
         return False

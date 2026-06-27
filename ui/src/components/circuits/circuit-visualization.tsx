@@ -41,6 +41,67 @@ const formatProbability = (prob: number): string => {
   }
 };
 
+const maskActivationsToPosition = (activations: number[] | undefined, position: number): number[] | undefined => {
+  if (!Array.isArray(activations) || position < 0 || position >= 64) return activations;
+  const masked = new Array(64).fill(0);
+  masked[position] = Number(activations[position]) || 0;
+  return masked;
+};
+
+const filterZPatternToSourcePosition = (
+  zPatternIndices: number[][] | undefined,
+  zPatternValues: number[] | undefined,
+  sourcePosition: number
+): { zPatternIndices?: number[][]; zPatternValues?: number[] } => {
+  if (!Array.isArray(zPatternIndices) || !Array.isArray(zPatternValues)) {
+    return {};
+  }
+
+  const filteredIndices: number[][] = [];
+  const filteredValues: number[] = [];
+  const looksLikePairList = Array.isArray(zPatternIndices[0]) && zPatternIndices[0].length === 2;
+
+  if (looksLikePairList) {
+    for (let i = 0; i < Math.min(zPatternIndices.length, zPatternValues.length); i++) {
+      const pair = zPatternIndices[i];
+      if (Number(pair?.[0]) !== sourcePosition) continue;
+      filteredIndices.push([Number(pair[0]), Number(pair[1])]);
+      filteredValues.push(Number(zPatternValues[i]) || 0);
+    }
+  } else if (zPatternIndices.length >= 2) {
+    const sources = zPatternIndices[0];
+    const targets = zPatternIndices[1];
+    for (let i = 0; i < Math.min(sources.length, targets.length, zPatternValues.length); i++) {
+      if (Number(sources[i]) !== sourcePosition) continue;
+      filteredIndices.push([Number(sources[i]), Number(targets[i])]);
+      filteredValues.push(Number(zPatternValues[i]) || 0);
+    }
+  }
+
+  return {
+    zPatternIndices: filteredIndices.length > 0 ? filteredIndices : undefined,
+    zPatternValues: filteredValues.length > 0 ? filteredValues : undefined,
+  };
+};
+
+const restrictActivationDataToPosition = (
+  data: NodeActivationData | null | undefined,
+  position: number
+): NodeActivationData | null | undefined => {
+  if (!data) return data;
+  const filteredZPattern = filterZPatternToSourcePosition(
+    data.zPatternIndices,
+    data.zPatternValues,
+    position
+  );
+  return {
+    ...data,
+    activations: maskActivationsToPosition(data.activations, position),
+    zPatternIndices: filteredZPattern.zPatternIndices,
+    zPatternValues: filteredZPattern.zPatternValues,
+  };
+};
+
 export const CircuitVisualization = () => {
   const {
     circuitData: linkGraphData,
@@ -81,6 +142,7 @@ export const CircuitVisualization = () => {
   const [isDragOver, setIsDragOver] = useState(false);
   const [selectedFeature, setSelectedFeature] = useState<Feature | null>(null);
   const [connectedFeatures, setConnectedFeatures] = useState<Feature[]>([]);
+  const [backendActivationError, setBackendActivationError] = useState<string | null>(null);
 
   // Extract FEN and moves using custom hook
   const fenExtraction = useFenExtraction({
@@ -99,7 +161,7 @@ export const CircuitVisualization = () => {
   });
 
   // Circuit backend API
-  const { fetchAllPositionsFromBackend, fetchZPatternForPosFromBackend } = useCircuitBackend({
+  const { fetchAllPositionsFromBackend, fetchFeatureActivationFromBackend } = useCircuitBackend({
     setLoadingAllPositions: actions.activation.setLoadingAllPositions,
     linkGraphData,
   });
@@ -518,9 +580,10 @@ export const CircuitVisualization = () => {
     setMultiGraphActivationData({});
   }, [clickedId]);
 
-  /** Fetch z_pattern from backend when a Lorsa node is clicked (single-file, single-position mode). */
+  /** Fetch current-FEN activation data from backend in single-file, single-position mode. */
   useEffect(() => {
     setBackendZPatternByNode(null);
+    setBackendActivationError(null);
 
     if (!clickedId || showAllPositions) return;
 
@@ -529,7 +592,6 @@ export const CircuitVisualization = () => {
 
     const currentNode = (linkGraphData?.nodes || []).find((n: any) => n?.nodeId === clickedId);
     const featureType = typeof currentNode?.feature_type === "string" ? currentNode.feature_type.toLowerCase() : "";
-    if (featureType !== "lorsa") return;
 
     const fenLocal = extractFenFromPrompt();
     if (!fenLocal) return;
@@ -537,20 +599,31 @@ export const CircuitVisualization = () => {
     const parts = clickedId.split("_");
     const rawLayer = Number(parts[0]) || 0;
     const featureIndex = Number(parts[1]) || 0;
-    const pos = Number(parts[2]) || 0;
     const layerIdx = Math.floor(rawLayer / 2);
-    const dictionary = getDictionaryName(layerIdx, true);
+    const dictionary = getDictionaryName(layerIdx, featureType === "lorsa");
 
     const controller = new AbortController();
     setLoadingBackendZPattern(true);
 
-    fetchZPatternForPosFromBackend(dictionary, featureIndex, fenLocal, pos, controller.signal)
-      .then((zp) => {
-        if (!zp) return;
+    fetchFeatureActivationFromBackend(dictionary, featureIndex, fenLocal, controller.signal)
+      .then((data) => {
+        if (!data) {
+          setBackendActivationError("Backend did not return feature activation data.");
+          return;
+        }
+        const ctxIdx = Number(parts[2]) || 0;
+        if (!data.activations) {
+          setBackendActivationError("Backend response did not include activations.");
+        } else if ((Number(data.activations[ctxIdx]) || 0) === 0) {
+          setBackendActivationError("Current node position has zero activation for this feature.");
+        } else {
+          setBackendActivationError(null);
+        }
         setBackendZPatternByNode({
           nodeId: clickedId,
-          zPatternIndices: zp.zPatternIndices,
-          zPatternValues: zp.zPatternValues,
+          activations: data.activations,
+          zPatternIndices: data.zPatternIndices,
+          zPatternValues: data.zPatternValues,
         });
       })
       .finally(() => {
@@ -566,7 +639,7 @@ export const CircuitVisualization = () => {
     linkGraphData,
     extractFenFromPrompt,
     getDictionaryName,
-    fetchZPatternForPosFromBackend,
+    fetchFeatureActivationFromBackend,
   ]);
 
   /** Update all-positions activation data when node or mode changes. */
@@ -599,13 +672,21 @@ export const CircuitVisualization = () => {
       ? allPositionsActivationData
       : nodeActivationData;
 
-    if (!showAllPositions && clickedId && backendZPatternByNode?.nodeId === clickedId) {
-      return {
-        ...base,
-        zPatternIndices: backendZPatternByNode.zPatternIndices,
-        zPatternValues: backendZPatternByNode.zPatternValues,
-      };
+    if (!showAllPositions && clickedId) {
+      const clickedPosition = parseNodeId(clickedId).ctxIdx;
+      if (backendZPatternByNode?.nodeId === clickedId) {
+        const backendActivations = backendZPatternByNode.activations;
+        const hasBackendPositionActivation = (Number(backendActivations?.[clickedPosition]) || 0) !== 0;
+        return restrictActivationDataToPosition({
+          ...base,
+          activations: hasBackendPositionActivation ? backendActivations : base?.activations,
+          zPatternIndices: backendZPatternByNode.zPatternIndices,
+          zPatternValues: backendZPatternByNode.zPatternValues,
+        }, clickedPosition);
+      }
+      return restrictActivationDataToPosition(base, clickedPosition);
     }
+
     return base;
   }, [showAllPositions, allPositionsActivationData, nodeActivationData, clickedId, backendZPatternByNode]);
 
@@ -1932,8 +2013,13 @@ export const CircuitVisualization = () => {
               <div className="text-center mb-2 text-sm text-blue-600">
                 <div className="flex items-center justify-center space-x-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
-                  <span>Computing z_pattern from backend...</span>
+                  <span>Loading feature activation from backend...</span>
                 </div>
+              </div>
+            )}
+            {clickedId && !showAllPositions && backendActivationError && (
+              <div className="text-center mb-2 text-sm text-red-600">
+                {backendActivationError}
               </div>
             )}
             {clickedId && displayActivationData && displayActivationData.activations && (
@@ -2224,6 +2310,10 @@ export const CircuitVisualization = () => {
                 } else {
                   // Get activation data for single position
                   perFileActivation = getNodeActivationDataFromJson(entry.json, clickedId);
+                  perFileActivation = restrictActivationDataToPosition(
+                    perFileActivation,
+                    parseNodeId(clickedId).ctxIdx
+                  ) || perFileActivation;
                 }
               }
               

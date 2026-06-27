@@ -23,7 +23,7 @@ export interface ActivationState {
   loadingAllPositions: boolean;
   multiGraphActivationData: Record<number, any | null>;
   loadingBackendZPattern: boolean;
-  backendZPatternByNode: { nodeId: string; zPatternIndices?: number[][]; zPatternValues?: number[] } | null;
+  backendZPatternByNode: { nodeId: string; activations?: number[]; zPatternIndices?: number[][]; zPatternValues?: number[] } | null;
 }
 
 export interface DisplayState {
@@ -189,7 +189,7 @@ type CircuitAction =
   | { type: 'SET_LOADING_ALL_POSITIONS'; payload: boolean }
   | { type: 'SET_MULTI_GRAPH_DATA'; payload: Record<number, any | null> }
   | { type: 'SET_LOADING_BACKEND_Z_PATTERN'; payload: boolean }
-  | { type: 'SET_BACKEND_Z_PATTERN_BY_NODE'; payload: { nodeId: string; zPatternIndices?: number[][]; zPatternValues?: number[] } | null }
+  | { type: 'SET_BACKEND_Z_PATTERN_BY_NODE'; payload: { nodeId: string; activations?: number[]; zPatternIndices?: number[][]; zPatternValues?: number[] } | null }
   | { type: 'SET_SHOW_ALL_POSITIONS'; payload: boolean }
   | { type: 'SET_SHOW_SUBGRAPH'; payload: boolean }
   | { type: 'SET_SUBGRAPH_DATA'; payload: any | null }
@@ -460,7 +460,7 @@ export const useCircuitStateReducer = () => {
       setLoadingBackendZPattern: useCallback((loading: boolean) => {
         dispatch({ type: 'SET_LOADING_BACKEND_Z_PATTERN', payload: loading });
       }, []),
-      setBackendZPatternByNode: useCallback((data: { nodeId: string; zPatternIndices?: number[][]; zPatternValues?: number[] } | null) => {
+      setBackendZPatternByNode: useCallback((data: { nodeId: string; activations?: number[]; zPatternIndices?: number[][]; zPatternValues?: number[] } | null) => {
         dispatch({ type: 'SET_BACKEND_Z_PATTERN_BY_NODE', payload: data });
       }, []),
       resetActivationState: useCallback(() => {

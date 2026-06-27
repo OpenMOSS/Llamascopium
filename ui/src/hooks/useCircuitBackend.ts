@@ -15,10 +15,40 @@ export interface UseCircuitBackendOptions {
   linkGraphData?: { nodes?: Array<{ nodeId: string; feature_type?: string; clerp?: string }> } | null;
 }
 
+const appendZPatternPairs = (
+  targetIndices: number[][],
+  targetValues: number[],
+  indices?: number[][],
+  values?: number[]
+) => {
+  if (!indices || !values) return;
+
+  const looksLikePairList = Array.isArray(indices[0]) && indices[0].length === 2;
+  if (looksLikePairList) {
+    for (let i = 0; i < Math.min(indices.length, values.length); i++) {
+      const pair = indices[i];
+      if (!Array.isArray(pair) || pair.length < 2) continue;
+      targetIndices.push([Number(pair[0]), Number(pair[1])]);
+      targetValues.push(Number(values[i]) || 0);
+    }
+    return;
+  }
+
+  if (indices.length >= 2 && Array.isArray(indices[0]) && Array.isArray(indices[1])) {
+    const sources = indices[0];
+    const targets = indices[1];
+    for (let i = 0; i < Math.min(sources.length, targets.length, values.length); i++) {
+      targetIndices.push([Number(sources[i]), Number(targets[i])]);
+      targetValues.push(Number(values[i]) || 0);
+    }
+  }
+};
+
 /**
  * Fetch activation data for all positions from backend.
  * Merges activations across positions by taking max absolute value per cell.
- * z_pattern is not included (semantically tied to a single query position).
+ * Also keeps z_pattern pairs from every query position so hover can show
+ * source -> target connections in all-positions mode.
  */
 export const fetchAllPositionsFromBackend = async (
   dictionary: string,
@@ -47,6 +77,8 @@ export const fetchAllPositionsFromBackend = async (
     const data = await response.json();
 
     const mergedActivations = new Array(64).fill(0);
+    const mergedZPatternIndices: number[][] = [];
+    const mergedZPatternValues: number[] = [];
     if (data.positions && Array.isArray(data.positions)) {
       for (const posData of data.positions) {
         if (posData.activations && Array.isArray(posData.activations) && posData.activations.length === 64) {
@@ -57,13 +89,19 @@ export const fetchAllPositionsFromBackend = async (
             }
           }
         }
+
+        const { zPatternIndices, zPatternValues } = normalizeZPattern(
+          posData.z_pattern_indices ?? posData.zPatternIndices,
+          posData.z_pattern_values ?? posData.zPatternValues
+        );
+        appendZPatternPairs(mergedZPatternIndices, mergedZPatternValues, zPatternIndices, zPatternValues);
       }
     }
 
     return {
       activations: mergedActivations,
-      zPatternIndices: undefined,
-      zPatternValues: undefined,
+      zPatternIndices: mergedZPatternIndices.length > 0 ? mergedZPatternIndices : undefined,
+      zPatternValues: mergedZPatternValues.length > 0 ? mergedZPatternValues : undefined,
       nodeType: nodeMetadata?.nodeType,
       clerp: nodeMetadata?.clerp,
     };
@@ -74,9 +112,69 @@ export const fetchAllPositionsFromBackend = async (
 };
 
 export interface ZPatternResult {
+  activations?: number[];
   zPatternIndices?: number[][];
   zPatternValues?: number[];
 }
+
+const parseAnalyzeFenResponse = (data: any): ZPatternResult => {
+  let activations: number[] | undefined = undefined;
+  if (Array.isArray(data?.feature_acts_indices) && Array.isArray(data?.feature_acts_values)) {
+    activations = new Array(64).fill(0);
+    const indices = data.feature_acts_indices;
+    const values = data.feature_acts_values;
+    for (let i = 0; i < Math.min(indices.length, values.length); i++) {
+      const idx = Number(indices[i]);
+      const value = Number(values[i]) || 0;
+      if (idx >= 0 && idx < 64) activations[idx] = value;
+    }
+  }
+
+  const { zPatternIndices, zPatternValues } = normalizeZPattern(
+    data?.z_pattern_indices ?? data?.zPatternIndices,
+    data?.z_pattern_values ?? data?.zPatternValues
+  );
+
+  return { activations, zPatternIndices, zPatternValues };
+};
+
+/**
+ * Fetch current-FEN feature activations for single-position mode.
+ * This works for both Lorsa and Transcoder. Lorsa responses may include
+ * z_pattern, while Transcoder responses only include activations.
+ */
+export const fetchFeatureActivationFromBackend = async (
+  dictionary: string,
+  featureIndex: number,
+  fen: string,
+  signal?: AbortSignal
+): Promise<ZPatternResult | null> => {
+  try {
+    const response = await fetch(
+      `${getBackendUrl()}/dictionaries/${dictionary}/features/${featureIndex}/analyze_fen`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ fen: fen.trim() }),
+        signal,
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || `HTTP ${response.status}`);
+    }
+
+    return parseAnalyzeFenResponse(await response.json());
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return null;
+    console.error("fetchFeatureActivationFromBackend failed:", error);
+    return null;
+  }
+};
 
 /**
  * Fetch z_pattern for a Lorsa feature at a specific query position (single-position display).
@@ -115,12 +213,15 @@ export const fetchZPatternForPosFromBackend = async (
     const posData = positions.find((p: { position?: number }) => Number(p?.position) === queryPos);
     if (!posData) return null;
 
+    const activations = Array.isArray(posData.activations) && posData.activations.length === 64
+      ? posData.activations.map((value: unknown) => Number(value) || 0)
+      : undefined;
     const { zPatternIndices, zPatternValues } = normalizeZPattern(
       (posData as { z_pattern_indices?: unknown }).z_pattern_indices,
       (posData as { z_pattern_values?: unknown }).z_pattern_values
     );
 
-    return { zPatternIndices, zPatternValues };
+    return { activations, zPatternIndices, zPatternValues };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") return null;
     console.error("fetchZPatternForPosFromBackend failed:", error);
@@ -158,6 +259,7 @@ export const useCircuitBackend = (options: UseCircuitBackendOptions = {}) => {
 
   return {
     fetchAllPositionsFromBackend: fetchAllPositions,
+    fetchFeatureActivationFromBackend,
     fetchZPatternForPosFromBackend,
   };
 };
