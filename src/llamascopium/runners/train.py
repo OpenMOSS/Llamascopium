@@ -63,9 +63,6 @@ class TrainSAESettings(BaseSettings):
     model_parallel_size: int = 1
     """Size of model parallel (tensor parallel) mesh"""
 
-    data_parallel_size: int = 1
-    """Size of data parallel mesh"""
-
     mongo: Optional[MongoDBConfig] = None
     """Configuration for MongoDB"""
 
@@ -1307,6 +1304,16 @@ def sweep_sae(settings: SweepSAESettings) -> None:
         if item.wandb is not None and is_primary_rank(device_mesh)
         else None
     )
+    if wandb_logger is not None and isinstance(item.sae, SparseDictionaryConfig) and item.sae.sae_type == "lorsa":
+        wandb_logger.config.update(
+            {
+                "lorsa_attn_type": getattr(item.sae, "attn_type", None),
+                "lorsa_window_size": getattr(item.sae, "window_size", None),
+                "lorsa_rotary_base": getattr(item.sae, "rotary_base", None),
+                "lorsa_rotary_base_local": getattr(item.sae, "rotary_base_local", None),
+            },
+            allow_val_change=True,
+        )
     # TODO: implement eval_fn
     eval_fn = (lambda x: None) if settings.eval else None
 

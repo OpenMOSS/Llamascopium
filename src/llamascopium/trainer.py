@@ -604,7 +604,27 @@ class Trainer:
 
         try:
             activation_stream = iter(activation_stream)
-            batch = next(activation_stream)
+
+            def next_batch() -> dict[str, Tensor] | None:
+                try:
+                    batch = next(activation_stream)
+                    has_batch = 1
+                except StopIteration:
+                    batch = None
+                    has_batch = 0
+
+                if sae.device_mesh is not None:
+                    flag = torch.tensor(has_batch, device=torch.cuda.current_device())
+                    torch.distributed.all_reduce(flag, op=torch.distributed.ReduceOp.MIN)
+                    has_batch = int(flag.item())
+
+                return batch if has_batch else None
+
+            batch = next_batch()
+            if batch is None:
+                logger.info("the current stream has ended")
+                return True
+
             while True:
                 with timer.time("training_iteration"):
                     proc_bar.update(1)
@@ -665,7 +685,10 @@ class Trainer:
                         break
                     with timer.time("refresh_batch"):
                         del batch
-                        batch = next(activation_stream)
+                        batch = next_batch()
+                        if batch is None:
+                            logger.info("the current stream has ended")
+                            return True
         except StopIteration:
             logger.info("the current stream has ended")
             return True

@@ -201,6 +201,10 @@ pyrightconfig.json
 .codex
 .agents
 
+# download
+download_from_hf.py
+get_l0.py
+
 # Claude Code
 CLAUDE.md
 .claude/
