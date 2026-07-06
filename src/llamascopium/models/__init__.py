@@ -3,7 +3,7 @@
 This package contains the sparse dictionary base class, protocol definitions,
 and all concrete model implementations.
 """
-
+from llamascopium.models.matryoshka_sae import MatryoshkaSAEConfig, MatryoshkaSparseAutoEncoder
 from llamascopium.models.protocols import (
     ActiveSubspaceInitializable,
     DatasetNormStandardizable,
@@ -22,6 +22,8 @@ from llamascopium.models.sparse_dictionary import (
 __all__ = [
     "SparseDictionary",
     "SparseDictionaryConfig",
+    "MatryoshkaSAEConfig",
+    "MatryoshkaSparseAutoEncoder",
     "register_sae_config",
     "register_sae_model",
     "NormComputing",

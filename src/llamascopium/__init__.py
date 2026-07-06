@@ -50,6 +50,7 @@ from .initializer import Initializer, InitializerConfig
 from .models.clt import CLTConfig, CrossLayerTranscoder
 from .models.crosscoder import Crosscoder, CrosscoderConfig
 from .models.lorsa import LorsaConfig, LowRankSparseAttention
+from .models.matryoshka_sae import MatryoshkaSAEConfig, MatryoshkaSparseAutoEncoder
 from .models.molt import MixtureOfLinearTransform, MOLTConfig
 from .models.protocols import (
     DatasetNormStandardizable,
@@ -177,6 +178,8 @@ __all__ = [
     "DirectLogitAttributor",
     "DirectLogitAttributeSettings",
     "direct_logit_attribute",
+    "MatryoshkaSAEConfig",
+    "MatryoshkaSparseAutoEncoder",
     "MOLTConfig",
     "MixtureOfLinearTransform",
     "train_molt",

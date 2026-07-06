@@ -41,4 +41,5 @@ class GenericPostAnalysisProcessor(PostAnalysisProcessor):
 
 # Register the processor for generic SAE types
 register_post_analysis_processor("sae", GenericPostAnalysisProcessor)
+register_post_analysis_processor("matryoshka_sae", GenericPostAnalysisProcessor)
 register_post_analysis_processor("generic", GenericPostAnalysisProcessor)
