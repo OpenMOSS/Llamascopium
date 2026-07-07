@@ -14,10 +14,10 @@ from jaxtyping import Float
 from torch.distributed.tensor import DTensor
 from typing_extensions import override
 
-from lm_saes.models.sae import SAEConfig, SparseAutoEncoder
-from lm_saes.models.sparse_dictionary import register_sae_config, register_sae_model
-from lm_saes.utils.distributed.ops import item
-from lm_saes.utils.tensor_specs import apply_token_mask
+from llamascopium.models.sae import SAEConfig, SparseAutoEncoder
+from llamascopium.models.sparse_dictionary import register_sae_config, register_sae_model
+from llamascopium.utils.distributed.ops import item
+from llamascopium.utils.tensor_specs import apply_token_mask
 
 
 @register_sae_config("matryoshka_sae")

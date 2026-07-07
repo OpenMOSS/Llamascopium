@@ -4,7 +4,7 @@ import types
 import safetensors.torch as safe
 import torch
 
-from lm_saes import (
+from llamascopium import (
     Initializer,
     InitializerConfig,
     MatryoshkaSAEConfig,
@@ -13,7 +13,7 @@ from lm_saes import (
     TrainerConfig,
     TrainSAESettings,
 )
-from lm_saes.models.sparse_dictionary import SparseDictionary
+from llamascopium.models.sparse_dictionary import SparseDictionary
 
 
 def test_matryoshka_config_normalizes_widths_and_weights():
