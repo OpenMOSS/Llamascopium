@@ -325,6 +325,20 @@ export interface CircuitTaxonomyBatchAnnotateResponse {
   results: Array<Record<string, unknown>>;
 }
 
+export interface CircuitTaxonomyProposalImportResponse {
+  status: "completed";
+  item_count: number;
+  unique_feature_count: number;
+  counts: {
+    updated: number;
+    skipped_existing: number;
+    duplicate: number;
+    conflict: number;
+    error: number;
+  };
+  results: Array<Record<string, unknown>>;
+}
+
 export interface CircuitTaxonomyReviewStateResponse {
   status: "missing" | "loaded" | "saved" | "snapshot_saved" | "reset";
   proposals?: unknown[];
@@ -623,6 +637,27 @@ export const annotateCircuitTaxonomyFeatures = async (
       items,
       overwrite,
     }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.json();
+};
+
+export const importCircuitTaxonomyProposals = async (
+  items: Array<{
+    dictionary_name: string;
+    feature_index: number;
+    taxonomy: string;
+  }>,
+): Promise<CircuitTaxonomyProposalImportResponse> => {
+  const response = await fetch(`${API_BASE}/circuit_taxonomy/import_proposals`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ items }),
   });
 
   if (!response.ok) {

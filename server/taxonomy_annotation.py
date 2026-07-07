@@ -1143,4 +1143,146 @@ def get_circuit_taxonomy_router(
             "results": results,
         }
 
+    @router.post("/circuit_taxonomy/import_proposals")
+    def import_proposals(request: dict[str, Any]):
+        """Apply proposal taxonomies only to features with empty interpretations.
+
+        This endpoint intentionally has stricter preservation semantics than
+        ``annotate_batch``: any non-empty interpretation text is immutable,
+        regardless of whether it already has a taxonomy prefix.
+        """
+        raw_items = request.get("items", [])
+        if not isinstance(raw_items, list):
+            raise HTTPException(status_code=400, detail="items must be a list")
+
+        parsed_items: dict[tuple[str, int], dict[str, Any]] = {}
+        conflicting_keys: set[tuple[str, int]] = set()
+        results: list[dict[str, Any]] = []
+        counts: dict[str, int] = {
+            "updated": 0,
+            "skipped_existing": 0,
+            "duplicate": 0,
+            "conflict": 0,
+            "error": 0,
+        }
+
+        for raw_index, raw_item in enumerate(raw_items):
+            if not isinstance(raw_item, dict):
+                counts["error"] += 1
+                results.append({"index": raw_index, "status": "error", "error": "item must be an object"})
+                continue
+
+            dictionary_name = str(raw_item.get("dictionary_name") or raw_item.get("dictionaryName") or "").strip()
+            taxonomy = str(raw_item.get("taxonomy", "")).strip().strip("[]")
+            try:
+                feature_index = int(raw_item.get("feature_index", raw_item.get("featureIndex")))
+            except (TypeError, ValueError):
+                counts["error"] += 1
+                results.append({
+                    "index": raw_index,
+                    "status": "error",
+                    "dictionary_name": dictionary_name,
+                    "error": "feature_index must be an integer",
+                })
+                continue
+
+            if not dictionary_name:
+                counts["error"] += 1
+                results.append({"index": raw_index, "status": "error", "error": "dictionary_name is required"})
+                continue
+            if taxonomy not in CIRCUIT_TAXONOMY_LABELS:
+                counts["error"] += 1
+                results.append({
+                    "index": raw_index,
+                    "status": "error",
+                    "dictionary_name": dictionary_name,
+                    "feature_index": feature_index,
+                    "taxonomy": taxonomy,
+                    "error": f"Unsupported taxonomy label: {taxonomy}",
+                })
+                continue
+
+            item_key = (dictionary_name, feature_index)
+            previous = parsed_items.get(item_key)
+            if previous is not None:
+                if previous["taxonomy"] != taxonomy:
+                    conflicting_keys.add(item_key)
+                else:
+                    counts["duplicate"] += 1
+                continue
+            parsed_items[item_key] = {
+                "index": raw_index,
+                "dictionary_name": dictionary_name,
+                "feature_index": feature_index,
+                "taxonomy": taxonomy,
+            }
+
+        for item_key, item in parsed_items.items():
+            if item_key in conflicting_keys:
+                counts["conflict"] += 1
+                results.append({
+                    **item,
+                    "status": "conflict",
+                    "error": "The uploaded proposals contain different taxonomy labels for this feature",
+                })
+                continue
+
+            feature = client.get_feature(
+                sae_name=item["dictionary_name"],
+                sae_series=sae_series,
+                index=item["feature_index"],
+            )
+            if feature is None:
+                counts["error"] += 1
+                results.append({**item, "status": "error", "error": "Feature not found"})
+                continue
+
+            raw_interpretation = feature.interpretation
+            if isinstance(raw_interpretation, dict):
+                existing_text = str(raw_interpretation.get("text", "") or "").strip()
+            elif isinstance(raw_interpretation, str):
+                existing_text = raw_interpretation.strip()
+            else:
+                existing_text = ""
+
+            if existing_text:
+                counts["skipped_existing"] += 1
+                results.append({
+                    **item,
+                    "status": "skipped_existing",
+                    "existing_text": existing_text,
+                })
+                continue
+
+            updated_interpretation = dict(raw_interpretation) if isinstance(raw_interpretation, dict) else {}
+            updated_interpretation["text"] = f"[{item['taxonomy']}]"
+            updated_interpretation["method"] = updated_interpretation.get("method") or "taxonomy_label"
+            updated_interpretation["validation"] = updated_interpretation.get("validation") or []
+            try:
+                client.update_feature(
+                    sae_name=item["dictionary_name"],
+                    sae_series=sae_series,
+                    feature_index=item["feature_index"],
+                    update_data={"interpretation": updated_interpretation},
+                )
+            except Exception as update_error:
+                counts["error"] += 1
+                results.append({**item, "status": "error", "error": str(update_error)})
+                continue
+
+            counts["updated"] += 1
+            results.append({
+                **item,
+                "status": "updated",
+                "interpretation": updated_interpretation,
+            })
+
+        return {
+            "status": "completed",
+            "item_count": len(raw_items),
+            "unique_feature_count": len(parsed_items),
+            "counts": counts,
+            "results": results,
+        }
+
     return router

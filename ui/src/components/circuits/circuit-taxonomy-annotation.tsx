@@ -30,6 +30,8 @@ import {
   fetchCircuitTaxonomyResumeTarget,
   fetchCircuitTaxonomyReviewState,
   fetchFeatureByDictionaryName,
+  importCircuitTaxonomyProposals,
+  CircuitTaxonomyProposalImportResponse,
   resetCircuitTaxonomyReviewState,
   saveAllCircuitTaxonomyEvidence,
   saveCircuitTaxonomyReviewState,
@@ -338,6 +340,8 @@ export const CircuitTaxonomyAnnotation = () => {
   const [reviewResetting, setReviewResetting] = useState(false);
   const [reviewStateMessage, setReviewStateMessage] = useState<string | null>(null);
   const [reviewSnapshotAwaitingChoice, setReviewSnapshotAwaitingChoice] = useState(false);
+  const [proposalFolderApplying, setProposalFolderApplying] = useState(false);
+  const [proposalFolderResult, setProposalFolderResult] = useState<CircuitTaxonomyProposalImportResponse | null>(null);
 
   const featureCacheRef = useRef<Record<string, Feature>>({});
   const pendingFeatureLoads = useRef<Map<string, Promise<Feature | null>>>(new Map());
@@ -924,6 +928,69 @@ export const CircuitTaxonomyAnnotation = () => {
       }
     },
     [reviewProposals.length],
+  );
+
+  const handleApplyProposalFolder = useCallback(
+    async (files: FileList | null) => {
+      if (!files || files.length === 0) {
+        return;
+      }
+
+      setReviewError(null);
+      setProposalFolderResult(null);
+      setProposalFolderApplying(true);
+      try {
+        const allFiles = Array.from(files);
+        const namedProposalFiles = allFiles.filter((file) => file.name.endsWith(".proposals.jsonl"));
+        const proposalFiles = namedProposalFiles.length > 0
+          ? namedProposalFiles
+          : allFiles.filter((file) => /\.(json|jsonl|ndjson)$/i.test(file.name));
+
+        if (proposalFiles.length === 0) {
+          throw new Error("The selected folder contains no proposal JSON or JSONL files.");
+        }
+
+        const parsedBatches = await Promise.all(
+          proposalFiles.map(async (file) => {
+            try {
+              return parseReviewProposalImport(await file.text()).proposals;
+            } catch (parseError) {
+              throw new Error(
+                `${file.webkitRelativePath || file.name}: ${
+                  parseError instanceof Error ? parseError.message : "invalid proposal file"
+                }`,
+              );
+            }
+          }),
+        );
+        const proposals = parsedBatches.flat();
+        if (proposals.length === 0) {
+          throw new Error("No valid proposal rows were found in the selected folder.");
+        }
+
+        const response = await importCircuitTaxonomyProposals(
+          proposals.map((proposal) => ({
+            dictionary_name: proposal.dictionaryName,
+            feature_index: proposal.featureIndex,
+            taxonomy: proposal.taxonomy,
+          })),
+        );
+        setProposalFolderResult(response);
+        setReviewStateMessage(
+          `Applied ${proposalFiles.length} proposal file(s): updated ${response.counts.updated}, ` +
+          `preserved ${response.counts.skipped_existing} existing interpretations, ` +
+          `${response.counts.conflict} conflicts, ${response.counts.error} errors.`,
+        );
+        if (currentFeatureRef) {
+          await refreshFeature(currentFeatureRef);
+        }
+      } catch (importError) {
+        setReviewError(importError instanceof Error ? importError.message : "Failed to apply proposal folder.");
+      } finally {
+        setProposalFolderApplying(false);
+      }
+    },
+    [currentFeatureRef, refreshFeature],
   );
 
   const handleSnapshotReviewState = useCallback(async () => {
@@ -1892,6 +1959,51 @@ const handleExportEvidence = useCallback(async () => {
         </TabsContent>
 
         <TabsContent value="import" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Apply Proposal Folder</CardTitle>
+              <CardDescription>
+                Select a folder containing proposal JSON/JSONL files. Features with non-empty interpretation text are preserved; only empty interpretations receive the uploaded taxonomy as <code>[taxonomy]</code>.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="inline-flex h-10 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent hover:text-accent-foreground">
+                {proposalFolderApplying ? "Applying Folder..." : "Select and Apply Proposal Folder"}
+                <input
+                  type="file"
+                  multiple
+                  disabled={proposalFolderApplying}
+                  className="hidden"
+                  ref={(input) => {
+                    input?.setAttribute("webkitdirectory", "");
+                    input?.setAttribute("directory", "");
+                  }}
+                  onChange={(event) => {
+                    void handleApplyProposalFolder(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+
+              {proposalFolderResult && (
+                <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                  <div>
+                    Read {proposalFolderResult.item_count} rows / {proposalFolderResult.unique_feature_count} unique features.
+                  </div>
+                  <div>
+                    Updated: {proposalFolderResult.counts.updated} · Preserved existing: {proposalFolderResult.counts.skipped_existing} · Duplicate rows: {proposalFolderResult.counts.duplicate} · Conflicts: {proposalFolderResult.counts.conflict} · Errors: {proposalFolderResult.counts.error}
+                  </div>
+                </div>
+              )}
+
+              {reviewError && (
+                <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+                  {reviewError}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <Card>
             <CardHeader>
               <CardTitle>Import LLM Proposals</CardTitle>
