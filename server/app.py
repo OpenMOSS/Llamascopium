@@ -102,6 +102,11 @@ try:
 except ImportError:
     from taxonomy_annotation import get_circuit_taxonomy_router
 
+try:
+    from .semantic_supernode_graph import get_semantic_supernode_graph_router
+except ImportError:
+    from semantic_supernode_graph import get_semantic_supernode_graph_router
+
 # Interaction functions are now implemented directly in this file
 
 try:
@@ -524,6 +529,7 @@ app.include_router(
         make_serializable=make_serializable,
     )
 )
+app.include_router(get_semantic_supernode_graph_router(repo_root=REPO_ROOT))
 
 
 def trim_minimum(

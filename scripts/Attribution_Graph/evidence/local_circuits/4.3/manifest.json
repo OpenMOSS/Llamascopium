@@ -1,0 +1,32 @@
+{
+  "directory_id": "circuits/4.3",
+  "created_at": "2026-07-08T06:47:31.603306+00:00",
+  "file_count": 4,
+  "item_count": 2914,
+  "files": [
+    {
+      "file_name": "confusion_Qxd7.json",
+      "status": "saved",
+      "item_count": 420,
+      "relative_path": "outputs/circuit_taxonomy_evidence/local_circuits/4.3/confusion_Qxd7.evidence.jsonl"
+    },
+    {
+      "file_name": "confusion_Qxh7+.json",
+      "status": "saved",
+      "item_count": 481,
+      "relative_path": "outputs/circuit_taxonomy_evidence/local_circuits/4.3/confusion_Qxh7+.evidence.jsonl"
+    },
+    {
+      "file_name": "confusion_fxg7+.json",
+      "status": "saved",
+      "item_count": 572,
+      "relative_path": "outputs/circuit_taxonomy_evidence/local_circuits/4.3/confusion_fxg7+.evidence.jsonl"
+    },
+    {
+      "file_name": "confusion_fxg7+_big.json",
+      "status": "saved",
+      "item_count": 1441,
+      "relative_path": "outputs/circuit_taxonomy_evidence/local_circuits/4.3/confusion_fxg7+_big.evidence.jsonl"
+    }
+  ]
+}

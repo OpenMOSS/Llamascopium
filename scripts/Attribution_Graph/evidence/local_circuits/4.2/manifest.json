@@ -1,0 +1,14 @@
+{
+  "directory_id": "circuits/4.2",
+  "created_at": "2026-07-08T06:38:38.170844+00:00",
+  "file_count": 1,
+  "item_count": 449,
+  "files": [
+    {
+      "file_name": "win_or_go_home_k30_e16.json",
+      "status": "saved",
+      "item_count": 449,
+      "relative_path": "outputs/circuit_taxonomy_evidence/local_circuits/4.2/win_or_go_home_k30_e16.evidence.jsonl"
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 import { Feature } from "@/types/feature";
+import { SemanticSupernodeGraph } from "@/types/semantic-supernode-graph";
 import { buildBt4DictionaryFromAnalysisName } from "@/utils/bt4Sae";
 import { decode } from "@msgpack/msgpack";
 import camelcaseKeys from "camelcase-keys";
@@ -865,3 +866,66 @@ export const setFeatureLevel = async (
 
   return response.json();
 }; 
+
+export const normalizeSemanticSupernodeGraph = async (
+  graph: Record<string, unknown>,
+): Promise<SemanticSupernodeGraph> => {
+  const response = await fetch(`${API_BASE}/semantic_supernode_graph/normalize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(graph),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to normalize semantic supernode graph: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+export const parseSemanticSupernodeGraphFile = async (
+  file: File,
+): Promise<SemanticSupernodeGraph> => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE}/semantic_supernode_graph/parse`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to parse semantic supernode graph: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+export const fetchSemanticSupernodeGraphFromPath = async (
+  path: string,
+): Promise<SemanticSupernodeGraph> => {
+  const params = new URLSearchParams({ path });
+  const response = await fetch(`${API_BASE}/semantic_supernode_graph/from_path?${params}`);
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to load semantic supernode graph: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+export const fetchSemanticSupernodeGraphExample = async (): Promise<SemanticSupernodeGraph> => {
+  const response = await fetch(`${API_BASE}/semantic_supernode_graph/example`);
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(error.detail || `Failed to load semantic supernode graph example: ${response.status}`);
+  }
+
+  return response.json();
+};

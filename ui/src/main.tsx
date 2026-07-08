@@ -23,6 +23,7 @@ import { PositionFeaturePage } from "./routes/position-feature/page";
 import { FeatureInteractionPage } from "./routes/feature-interaction/page";
 import { InteractionCircuitPage } from "./routes/interaction-circuit/page";
 import { CircuitTaxonomyPage } from "./routes/circuit-taxonomy/page";
+import { SemanticSupernodeGraphPage } from "./routes/semantic-supernode-graph/page";
 
 
 const router = createBrowserRouter([
@@ -97,6 +98,10 @@ const router = createBrowserRouter([
   {
     path: "/circuit-taxonomy",
     element: <CircuitTaxonomyPage />,
+  },
+  {
+    path: "/semantic-supernode-graph",
+    element: <SemanticSupernodeGraphPage />,
   },
   {
     path: "/",
