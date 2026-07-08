@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = REPO_ROOT / "src"
@@ -276,24 +277,60 @@ class FeatureSampleExporter:
         analysis_name: str,
         sae_name: str | None,
         layer: int | None,
-        limit: int,
+        features_per_layer: int,
+        total_limit: int | None,
         max_samples: int,
         top_squares: int,
         top_z: int,
+        show_progress: bool,
     ) -> list[dict[str, Any]]:
         sae_names = self.discover_saes(feature_type, analysis_name, sae_name, layer)
+        discovered_layers = {parsed[1] for name in sae_names if (parsed := parse_sae_name(name)) is not None}
+        print(
+            f"[1/3] Discovered {len(sae_names)} matching {feature_type} analysis SAE(s) "
+            f"across {len(discovered_layers)} layer(s): " + ", ".join(sae_names),
+            flush=True,
+        )
         rows = []
-        for selected_sae in sae_names:
-            remaining = limit - len(rows)
+        layer_counts: dict[int, int] = {}
+        sae_progress = tqdm(
+            sae_names,
+            desc="[2/3] Scanning SAEs",
+            unit="sae",
+            disable=not show_progress,
+        )
+        for selected_sae in sae_progress:
+            parsed_name = parse_sae_name(selected_sae)
+            if parsed_name is None:
+                continue
+            selected_layer = parsed_name[1]
+            remaining = features_per_layer - layer_counts.get(selected_layer, 0)
+            if remaining <= 0:
+                continue
+            if total_limit is not None:
+                if len(rows) >= total_limit:
+                    break
+                remaining = min(remaining, total_limit - len(rows))
             if remaining <= 0:
                 break
+            sae_progress.set_postfix(layer=selected_layer, exported=layer_counts.get(selected_layer, 0))
             query = {
                 "sae_name": selected_sae,
                 "sae_series": self.sae_series,
                 "analyses": {"$elemMatch": {"name": analysis_name, "max_feature_acts": {"$gt": 0}}},
             }
-            cursor = self.client.feature_collection.find(query, {"index": 1}).sort("index", 1).limit(remaining)
-            for item in cursor:
+            feature_refs = list(
+                self.client.feature_collection.find(query, {"index": 1}).sort("index", 1).limit(remaining)
+            )
+            feature_progress = tqdm(
+                feature_refs,
+                desc=f"      Exporting {selected_sae}",
+                unit="feature",
+                leave=False,
+                disable=not show_progress,
+            )
+            for item in feature_progress:
+                feature_progress.set_postfix(index=int(item["index"]))
                 rows.append(
                     self.export_feature(
                         selected_sae,
@@ -305,6 +342,7 @@ class FeatureSampleExporter:
                         top_z,
                     )
                 )
+                layer_counts[selected_layer] = layer_counts.get(selected_layer, 0) + 1
         return rows
 
 
@@ -315,41 +353,76 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--layer", type=int, help="Optional layer filter when discovering analyses")
     parser.add_argument("--sae-series", default=os.environ.get("SAE_SERIES", "BT4-exp128"))
     parser.add_argument("--analysis-name", default="default")
-    parser.add_argument("--limit", type=int, default=100, help="Maximum features to export (default: 100)")
+    parser.add_argument(
+        "--features-per-layer",
+        type=int,
+        default=20,
+        help="Alive features to export from each matching layer (default: 20)",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional global cap across all layers; normally leave unset",
+    )
     parser.add_argument("--max-samples", type=int, default=20)
     parser.add_argument("--top-squares", type=int, default=12)
     parser.add_argument("--top-z", type=int, default=16)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017/"))
     parser.add_argument("--mongo-db", default=os.environ.get("MONGO_DB", "mechinterp"))
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.limit <= 0 or args.max_samples <= 0:
-        raise SystemExit("--limit and --max-samples must be positive")
+    if args.features_per_layer <= 0 or args.max_samples <= 0 or (args.limit is not None and args.limit <= 0):
+        raise SystemExit("--features-per-layer, --max-samples, and optional --limit must be positive")
     feature_type = normalize_feature_type(args.feature_type)
     output = args.output or REPO_ROOT / "outputs" / "autointerp_score" / f"{feature_type}.jsonl"
     client = MongoClient(MongoDBConfig(mongo_uri=args.mongo_uri, mongo_db=args.mongo_db))
     exporter = FeatureSampleExporter(client, args.sae_series)
+    print(
+        f"[0/3] Starting export: type={feature_type}, series={args.sae_series}, "
+        f"analysis={args.analysis_name}, features_per_layer={args.features_per_layer}, "
+        f"total_limit={args.limit}, max_samples={args.max_samples}",
+        flush=True,
+    )
     rows = exporter.export(
         feature_type,
         args.analysis_name,
         args.sae_name,
         args.layer,
+        args.features_per_layer,
         args.limit,
         args.max_samples,
         args.top_squares,
         args.top_z,
+        not args.no_progress,
     )
     if not rows:
         raise SystemExit("No matching analyzed features were found")
     output.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[3/3] Writing {len(rows)} feature rows to {output}", flush=True)
     with output.open("w", encoding="utf-8") as handle:
-        for row in rows:
+        for row in tqdm(rows, desc="      Writing JSONL", unit="feature", disable=args.no_progress):
             handle.write(json.dumps(make_serializable(row), ensure_ascii=False) + "\n")
-    print(json.dumps({"output": str(output), "feature_type": feature_type, "features": len(rows)}, indent=2))
+    exported_by_layer: dict[str, int] = {}
+    for row in rows:
+        layer_key = str(row.get("layer"))
+        exported_by_layer[layer_key] = exported_by_layer.get(layer_key, 0) + 1
+    print(
+        json.dumps(
+            {
+                "output": str(output),
+                "feature_type": feature_type,
+                "features": len(rows),
+                "features_by_layer": exported_by_layer,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
