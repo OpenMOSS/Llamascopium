@@ -340,14 +340,21 @@ def get_semantic_supernode_graph_router(repo_root: Path) -> APIRouter:
 
     @router.get("/example")
     async def example_graph() -> dict[str, Any]:
-        example_path = (
+        candidate_paths = [
             repo_root
             / "scripts"
             / "Attribution_Graph"
             / "semantic_supernode_examples"
-            / "looking_ahead_semantic_graph.json"
-        )
-        if example_path.exists():
+            / "lookingahead_k30_e16.semantic_supernodes.json",
+            repo_root / "scripts" / "Attribution_Graph" / "proposals" / "lookingahead_k30_e16.semantic_supernodes.json",
+            repo_root
+            / "scripts"
+            / "Attribution_Graph"
+            / "semantic_supernode_examples"
+            / "looking_ahead_semantic_graph.json",
+        ]
+        example_path = next((path for path in candidate_paths if path.exists()), None)
+        if example_path is not None:
             raw_graph = json.loads(example_path.read_text(encoding="utf-8"))
             return normalize_semantic_supernode_graph(raw_graph)
         return normalize_semantic_supernode_graph(

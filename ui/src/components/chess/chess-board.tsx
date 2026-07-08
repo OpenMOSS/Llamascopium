@@ -12,6 +12,8 @@ interface ChessBoardProps {
   size?: 'small' | 'medium' | 'large';
   showCoordinates?: boolean;
   move?: string; // UCI move string, e.g. "a2a4"
+  highlightSquares?: string[]; // board squares to highlight without showing activation values, e.g. ["h8"]
+  highlightColor?: string;
   orientation?: 'white' | 'black' | 'auto';
   flip_activation?: boolean; // whether to flip activation index by row
   onMove?: (move: string) => void;
@@ -217,6 +219,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   size = 'medium',
   showCoordinates = true,
   move,
+  highlightSquares = [],
+  highlightColor = 'rgba(250, 204, 21, 0.72)',
   flip_activation = true,
   onMove,
   onSquareClick,
@@ -607,6 +611,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
               
               const isMoveFromSquare = parsedMove && parsedMove.from.index === squareIndex;
               const isMoveToSquare = parsedMove && parsedMove.to.index === squareIndex;
+              const displaySquareName = `${getDisplayColLetter(colIndex)}${getDisplayRowNumber(displayRowIndex)}`;
+              const isHighlightedSquare = highlightSquares.includes(displaySquareName);
               
               const isSelectedSquare = selectedSquare === activationIndex;
               
@@ -617,6 +623,8 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
               
               if (isSelectedSquare) {
                 finalBackgroundColor = 'rgba(59, 130, 246, 0.8)';
+              } else if (isHighlightedSquare) {
+                finalBackgroundColor = highlightColor;
               } else if (isMoveFromSquare) {
                 finalBackgroundColor = (moveColor || 'rgba(34, 197, 94, 0.7)');
               } else if (isMoveToSquare) {
