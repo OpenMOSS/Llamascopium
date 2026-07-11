@@ -183,6 +183,7 @@ pyrightconfig.json
 
 # UI
 !ui/**/*
+ui/bun.lockb
 
 # Custom
 /sync.sh
