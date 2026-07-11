@@ -236,3 +236,5 @@ restore_meta.py
 !/scripts/circuit_taxonomy/README.md
 !/scripts/circuit_taxonomy/taxonomy_runner.py
 
+# Shared-file RPC runtime queue
+.shared_file_rpc/
