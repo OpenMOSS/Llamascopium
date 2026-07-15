@@ -6,7 +6,7 @@ import typer
 from llamascopium.backend.language_model import LanguageModelConfig
 from llamascopium.config import DatasetConfig
 from llamascopium.database import MongoClient, MongoDBConfig
-from llamascopium.models.sae import SAEConfig
+from llamascopium.models.sparse_dictionary import SparseDictionaryConfig
 
 from .common import (
     DEFAULT_MONGO_DB,
@@ -56,13 +56,36 @@ def create_sae(
     series: SAESeriesOption = DEFAULT_SAE_SERIES,
     mongo_uri: MongoURIOption = DEFAULT_MONGO_URI,
     mongo_db: MongoDBOption = DEFAULT_MONGO_DB,
+    model_name: Annotated[
+        str | None,
+        typer.Option("--model-name", help="Language model associated with this SAE."),
+    ] = None,
+    metadata_only: Annotated[
+        bool,
+        typer.Option(
+            "--metadata-only",
+            help="Upsert only the SAE record without creating or modifying feature documents.",
+        ),
+    ] = False,
 ) -> None:
     """Create an SAE record in the database."""
     client = MongoClient(MongoDBConfig(mongo_uri=mongo_uri, mongo_db=mongo_db))
-    client.create_sae(
-        name=name,
-        series=series,
-        path=str(path),
-        cfg=SAEConfig.from_pretrained(str(path)),
-    )
-    typer.echo(f"SAE '{name}' (series: {series}) created successfully.")
+    cfg = SparseDictionaryConfig.from_pretrained(str(path))
+    if metadata_only:
+        client.upsert_sae_metadata(
+            name=name,
+            series=series,
+            path=str(path),
+            cfg=cfg,
+            model_name=model_name,
+        )
+        typer.echo(f"SAE metadata '{name}' (series: {series}) upserted successfully; features were not modified.")
+    else:
+        client.create_sae(
+            name=name,
+            series=series,
+            path=str(path),
+            cfg=cfg,
+            model_name=model_name,
+        )
+        typer.echo(f"SAE '{name}' (series: {series}) created successfully.")
