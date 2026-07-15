@@ -50,6 +50,46 @@ def test_create_and_get_sae(mongo_client: MongoClient) -> None:
     assert result.cfg.d_sae == cfg.d_sae
 
 
+def test_upsert_sae_metadata_preserves_existing_features(mongo_client: MongoClient) -> None:
+    cfg = SAEConfig(
+        hook_point_in="test_hook_point_in",
+        hook_point_out="test_hook_point_out",
+        d_model=2,
+        expansion_factor=2,
+    )
+    feature = {
+        "sae_name": "test_sae",
+        "sae_series": "test_series",
+        "index": 0,
+        "analyses": [{"name": "existing-analysis"}],
+    }
+    mongo_client.feature_collection.insert_one(feature)
+
+    mongo_client.upsert_sae_metadata(
+        "test_sae",
+        "test_series",
+        "first_path",
+        cfg,
+        model_name="test-model",
+    )
+    mongo_client.upsert_sae_metadata(
+        "test_sae",
+        "test_series",
+        "updated_path",
+        cfg,
+        model_name="test-model",
+    )
+
+    assert mongo_client.feature_collection.count_documents({}) == 1
+    stored_feature = mongo_client.feature_collection.find_one({"sae_name": "test_sae"})
+    assert stored_feature is not None
+    assert stored_feature["analyses"] == [{"name": "existing-analysis"}]
+    stored_sae = mongo_client.sae_collection.find_one({"name": "test_sae", "series": "test_series"})
+    assert stored_sae is not None
+    assert stored_sae["path"] == "updated_path"
+    assert stored_sae["model_name"] == "test-model"
+
+
 def test_list_saes(mongo_client: MongoClient) -> None:
     """Test listing SAE records."""
     # Arrange

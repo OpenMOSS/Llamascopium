@@ -286,6 +286,31 @@ class MongoClient:
         )
         return inserted_id
 
+    def upsert_sae_metadata(
+        self,
+        name: str,
+        series: str,
+        path: str,
+        cfg: SparseDictionaryConfig,
+        model_name: str | None = None,
+    ) -> ObjectId | None:
+        """Create or update an SAE record without modifying feature documents."""
+        metadata: dict[str, Any] = {
+            "name": name,
+            "series": series,
+            "path": path,
+            "cfg": cfg.model_dump(),
+        }
+        if model_name is not None:
+            metadata["model_name"] = model_name
+
+        result = self.sae_collection.update_one(
+            {"name": name, "series": series},
+            {"$set": metadata},
+            upsert=True,
+        )
+        return result.upserted_id
+
     def create_analysis(self, name: str, sae_name: str, sae_series: str):
         return self.analysis_collection.insert_one(
             {"name": name, "sae_name": sae_name, "sae_series": sae_series}
