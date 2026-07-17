@@ -1,7 +1,7 @@
 import { Feature, Interpretation, InterpretationSchema } from "@/types/feature";
 import { useState, useCallback, Suspense, useEffect } from "react";
 import { Button } from "../ui/button";
-import { Ban, Check, Info, ChevronDown, ChevronRight, Copy, CheckCircle2 } from "lucide-react";
+import { Ban, Check, Info, ChevronDown, ChevronRight, Copy, CheckCircle2, CircleDashed } from "lucide-react";
 import { useAsyncFn } from "react-use";
 import { Textarea } from "../ui/textarea";
 import camelcaseKeys from "camelcase-keys";
@@ -126,7 +126,9 @@ export const FeatureInterpretation = ({
     return <>{parts}</>;
   }, []);
 
-  const testNameMap = useCallback((method: string, passed: boolean) => {
+  const testNameMap = useCallback((method: string, passed?: boolean, status?: string) => {
+    if (status === "pending") return "Chess Rule Validation Pending";
+    if (status === "diagnostic") return "Chess Rule Diagnostic Pending";
     switch (method) {
       case "detection":
         return `Detection Test ${passed ? "Passed" : "Failed"}`;
@@ -343,12 +345,14 @@ export const FeatureInterpretation = ({
         <div className="flex flex-col gap-4 basis-1/3 min-w-1/3">
           {interpretation?.validation.map((validation, i) => (
             <div key={i} className="flex items-center gap-2">
-              {validation.passed ? (
+              {validation.status === "pending" || validation.status === "diagnostic" ? (
+                <CircleDashed size={20} className="text-amber-500" />
+              ) : validation.passed ? (
                 <Check size={20} className="text-green-500" />
               ) : (
                 <Ban size={20} className="text-red-500" />
               )}
-              <p>{testNameMap(validation.method, validation.passed)}</p>
+              <p>{testNameMap(validation.method, validation.passed, validation.status)}</p>
               {validation.detail && (
                 <HoverCard>
                   <HoverCardTrigger>

@@ -41,7 +41,12 @@ export const InterpretationSchema = z.object({
     .array(
       z.object({
         method: z.string(),
-        passed: z.boolean(),
+        status: z.string().optional(),
+        passed: z.boolean().optional(),
+        rule: z.record(z.string(), z.any()).optional(),
+        threshold: z.record(z.string(), z.any()).optional(),
+        cases: z.record(z.string(), z.any()).optional(),
+        selectionMetrics: z.record(z.string(), z.any()).optional(),
         detail: z
           .object({
             prompt: z.string(),

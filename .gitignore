@@ -233,6 +233,7 @@ restore_meta.py
 /outputs/circuit_taxonomy_evidence/
 /outputs/circuit_taxonomy_reviews/
 /scripts/circuit_taxonomy/
+/scripts/Attribution_Graph/
 !/scripts/circuit_taxonomy/README.md
 !/scripts/circuit_taxonomy/taxonomy_runner.py
 

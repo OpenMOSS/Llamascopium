@@ -5,7 +5,7 @@ from typing import Any, Callable, Protocol, Sequence
 
 import chess
 
-from src.chess_utils import get_piece_type_pos, get_start_end_pos_from_move_uci
+from chess_utils import get_piece_type_pos, get_start_end_pos_from_move_uci
 
 from .types import RuleEvaluation
 
@@ -206,6 +206,44 @@ class PieceTypeRule:
     def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
         positions = get_piece_type_pos(fen, self.piece_type)
         return RuleEvaluation(mask=_mask_from_positions(positions), metadata={"piece_type": self.piece_type})
+
+
+@dataclass(frozen=True)
+class EmptySquareRule:
+    """Match empty board squares."""
+
+    name: str = "empty_squares"
+    requires_move_uci: bool = False
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        positions = [_flip_square_for_bt4(board, square) for square in chess.SQUARES if board.piece_at(square) is None]
+        return RuleEvaluation(mask=_mask_from_positions(positions))
+
+
+@dataclass(frozen=True)
+class OccupiedSquareRule:
+    """Match all occupied squares, optionally restricted to one side."""
+
+    owner: str | None = None
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.owner not in {None, "own", "opponent"}:
+            raise ValueError(f"Unsupported owner: {self.owner}")
+        if self.name is None:
+            object.__setattr__(self, "name", f"occupied::{self.owner or 'any'}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        color = None if self.owner is None else (board.turn if self.owner == "own" else not board.turn)
+        positions = [
+            _flip_square_for_bt4(board, square)
+            for square, piece in board.piece_map().items()
+            if color is None or piece.color == color
+        ]
+        return RuleEvaluation(mask=_mask_from_positions(positions), metadata={"owner": self.owner})
 
 
 @dataclass(frozen=True)
@@ -468,6 +506,80 @@ class MoveEndSquareRule:
 
 
 @dataclass(frozen=True)
+class MoveStartPieceRule:
+    """Match a supervised move source only when it contains ``piece_type``."""
+
+    piece_type: str
+    name: str | None = None
+    requires_move_uci: bool = True
+
+    def __post_init__(self) -> None:
+        if self.name is None:
+            object.__setattr__(self, "name", f"move_start::{self.piece_type}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        if not move_uci:
+            raise ValueError("MoveStartPieceRule requires move_uci")
+        board = chess.Board(fen)
+        color, piece_enum = _parse_piece_type(board, self.piece_type)
+        move = chess.Move.from_uci(move_uci)
+        piece = board.piece_at(move.from_square)
+        matches = piece is not None and piece.color == color and piece.piece_type == piece_enum
+        positions = [_flip_square_for_bt4(board, move.from_square)] if matches else []
+        return RuleEvaluation(
+            mask=_mask_from_positions(positions),
+            metadata={"move_uci": move_uci, "piece_type": self.piece_type, "matches": matches},
+        )
+
+
+@dataclass(frozen=True)
+class MoveEndPieceRule:
+    """Match a supervised move destination for a selected moving piece.
+
+    ``target_owner`` optionally restricts whether the destination is empty,
+    occupied by an own piece, or occupied by an opponent piece before the move.
+    """
+
+    piece_type: str
+    target_owner: str | None = None
+    name: str | None = None
+    requires_move_uci: bool = True
+
+    def __post_init__(self) -> None:
+        if self.target_owner not in {None, "empty", "own", "opponent"}:
+            raise ValueError(f"Unsupported target owner: {self.target_owner}")
+        if self.name is None:
+            object.__setattr__(self, "name", f"move_end::{self.piece_type}::{self.target_owner or 'any'}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        if not move_uci:
+            raise ValueError("MoveEndPieceRule requires move_uci")
+        board = chess.Board(fen)
+        color, piece_enum = _parse_piece_type(board, self.piece_type)
+        move = chess.Move.from_uci(move_uci)
+        piece = board.piece_at(move.from_square)
+        target = board.piece_at(move.to_square)
+        matches_piece = piece is not None and piece.color == color and piece.piece_type == piece_enum
+        matches_target = (
+            self.target_owner is None
+            or (self.target_owner == "empty" and target is None)
+            or (self.target_owner == "own" and target is not None and target.color == board.turn)
+            or (self.target_owner == "opponent" and target is not None and target.color != board.turn)
+        )
+        matches = matches_piece and matches_target
+        positions = [_flip_square_for_bt4(board, move.to_square)] if matches else []
+        return RuleEvaluation(
+            mask=_mask_from_positions(positions),
+            metadata={
+                "move_uci": move_uci,
+                "piece_type": self.piece_type,
+                "target_owner": self.target_owner,
+                "matches": matches,
+            },
+        )
+
+
+@dataclass(frozen=True)
 class KingNeighborhoodRule:
     """Match the 3x3 neighbourhood around either own king or opponent king."""
 
@@ -538,6 +650,191 @@ class PieceDestinationRule:
             positions.append(_flip_square_for_bt4(board, move.to_square))
 
         return RuleEvaluation(mask=_mask_from_positions(sorted(set(positions))), metadata={"piece_type": self.piece_type})
+
+
+@dataclass(frozen=True)
+class PieceAttackRule:
+    """Match squares attacked by a specific own/opponent piece type.
+
+    Unlike ``PieceDestinationRule``, this includes defended friendly pieces and
+    pseudo-legal capture squares. It is therefore suitable for attack and
+    protection interpretations rather than movement-only interpretations.
+    """
+
+    piece_type: str
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.name is None:
+            object.__setattr__(self, "name", f"attacks::{self.piece_type}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        positions: set[int] = set()
+        for square in _get_piece_squares(board, self.piece_type):
+            positions.update(_flip_square_for_bt4(board, target) for target in board.attacks(square))
+        return RuleEvaluation(
+            mask=_mask_from_positions(sorted(positions)),
+            metadata={"piece_type": self.piece_type},
+        )
+
+
+@dataclass(frozen=True)
+class ProtectedPieceRule:
+    """Match pieces of ``piece_type`` defended by the requested side."""
+
+    piece_type: str
+    protector_owner: str | None = None
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.protector_owner not in {None, "own", "opponent"}:
+            raise ValueError(f"Unsupported protector owner: {self.protector_owner}")
+        if self.name is None:
+            protector = self.protector_owner or self.piece_type.split()[0]
+            object.__setattr__(self, "name", f"protected::{self.piece_type}::by_{protector}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        default_owner, _ = self.piece_type.split()
+        protector_owner = self.protector_owner or default_owner
+        protector_color = board.turn if protector_owner == "own" else not board.turn
+        positions = [
+            _flip_square_for_bt4(board, square)
+            for square in _get_piece_squares(board, self.piece_type)
+            if board.attackers(protector_color, square)
+        ]
+        return RuleEvaluation(
+            mask=_mask_from_positions(positions),
+            metadata={"piece_type": self.piece_type, "protector_owner": protector_owner},
+        )
+
+
+@dataclass(frozen=True)
+class CapturablePieceRule:
+    """Match opponent pieces that a selected side can capture immediately."""
+
+    attacker_piece_type: str | None = None
+    attacker_owner: str = "own"
+    target_piece_type: str | None = None
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.attacker_owner not in {"own", "opponent"}:
+            raise ValueError(f"Unsupported attacker owner: {self.attacker_owner}")
+        if self.attacker_piece_type and not self.attacker_piece_type.startswith(f"{self.attacker_owner} "):
+            raise ValueError("attacker_piece_type owner must match attacker_owner")
+        if self.name is None:
+            attacker = self.attacker_piece_type or f"{self.attacker_owner} any"
+            target = self.target_piece_type or "opposing any"
+            object.__setattr__(self, "name", f"capturable::{target}::by_{attacker}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        attacker_color = board.turn if self.attacker_owner == "own" else not board.turn
+        target_color = not attacker_color
+        attacker_enum = _parse_piece_type(board, self.attacker_piece_type)[1] if self.attacker_piece_type else None
+        target_enum = _parse_piece_type(board, self.target_piece_type)[1] if self.target_piece_type else None
+        positions: set[int] = set()
+        for square, piece in board.piece_map().items():
+            if piece.color != target_color or (target_enum is not None and piece.piece_type != target_enum):
+                continue
+            attackers = board.attackers(attacker_color, square)
+            if attacker_enum is not None:
+                attackers = chess.SquareSet(
+                    source for source in attackers if board.piece_type_at(source) == attacker_enum
+                )
+            if attackers:
+                positions.add(_flip_square_for_bt4(board, square))
+        return RuleEvaluation(
+            mask=_mask_from_positions(sorted(positions)),
+            metadata={
+                "attacker_piece_type": self.attacker_piece_type,
+                "attacker_owner": self.attacker_owner,
+                "target_piece_type": self.target_piece_type,
+            },
+        )
+
+
+@dataclass(frozen=True)
+class CheckingMoveDestinationRule:
+    """Match legal move destinations that give check."""
+
+    piece_type: str | None = None
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.piece_type and not self.piece_type.startswith("own "):
+            raise ValueError("Checking moves must use an own piece selector")
+        if self.name is None:
+            object.__setattr__(self, "name", f"checking_destinations::{self.piece_type or 'own any'}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        piece_enum = _parse_piece_type(board, self.piece_type)[1] if self.piece_type else None
+        positions: set[int] = set()
+        for move in board.legal_moves:
+            piece = board.piece_at(move.from_square)
+            if piece is None or (piece_enum is not None and piece.piece_type != piece_enum):
+                continue
+            if board.gives_check(move):
+                positions.add(_flip_square_for_bt4(board, move.to_square))
+        return RuleEvaluation(
+            mask=_mask_from_positions(sorted(positions)),
+            metadata={"piece_type": self.piece_type},
+        )
+
+
+@dataclass(frozen=True)
+class RelativeBoardRegionRule:
+    """Match a named region in side-to-move coordinates."""
+
+    region: str
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        supported = {
+            "own_back_rank",
+            "own_two_ranks",
+            "opponent_back_rank",
+            "opponent_two_ranks",
+            "center_four",
+            "extended_center",
+            "edge",
+            "queenside",
+            "kingside",
+        }
+        if self.region not in supported:
+            raise ValueError(f"Unsupported board region: {self.region}")
+        if self.name is None:
+            object.__setattr__(self, "name", f"region::{self.region}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        positions: list[int] = []
+        for square in chess.SQUARES:
+            file_idx = chess.square_file(square)
+            rank_idx = chess.square_rank(square)
+            own_rank = rank_idx if board.turn == chess.WHITE else 7 - rank_idx
+            matches = {
+                "own_back_rank": own_rank == 0,
+                "own_two_ranks": own_rank <= 1,
+                "opponent_back_rank": own_rank == 7,
+                "opponent_two_ranks": own_rank >= 6,
+                "center_four": file_idx in {3, 4} and rank_idx in {3, 4},
+                "extended_center": file_idx in {2, 3, 4, 5} and rank_idx in {2, 3, 4, 5},
+                "edge": file_idx in {0, 7} or rank_idx in {0, 7},
+                "queenside": file_idx <= 3,
+                "kingside": file_idx >= 4,
+            }[self.region]
+            if matches:
+                positions.append(_flip_square_for_bt4(board, square))
+        return RuleEvaluation(mask=_mask_from_positions(positions), metadata={"region": self.region})
 
 
 @dataclass(frozen=True)

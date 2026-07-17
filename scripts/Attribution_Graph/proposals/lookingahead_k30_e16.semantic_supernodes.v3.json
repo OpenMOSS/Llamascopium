@@ -749,10 +749,7 @@
       ]
     ],
     "edge_policy": "Sparse but complete reasoning skeleton; every non-target displayed supernode has an outgoing semantic edge; Src and Tgt are explicitly connected.",
-    "ambiguous_singleton_policy": "Low-confidence sparse/ambiguous Tac features such as 12_5062_29 are not allowed to stand alone as displayed supernodes.",
-    "semantic_supernode_version": "v4",
-    "grouping_policy": "Displayed supernodes use one activation position each; every displayed member has an explicit interpretation-to-rule alignment note.",
-    "validation_command": "python ~/.codex/skills/group-chess-supernodes/scripts/validate_semantic_supernodes.py scripts/Attribution_Graph/proposals/lookingahead_k30_e16.semantic_supernodes.v4.json"
+    "ambiguous_singleton_policy": "Low-confidence sparse/ambiguous Tac features such as 12_5062_29 are not allowed to stand alone as displayed supernodes."
   },
   "board": {
     "fen": "2r2r1k/6pp/p1q2p2/1p6/3R1N2/PQ2P2P/1P3PP1/6K1 w - - 5 32",
@@ -3588,207 +3585,89 @@
         "prompt_piece_semantic": "OwnQueen",
         "source": "input_embedding_context"
       }
-    },
-    {
-      "feature_id": "18_345_31",
-      "node_id": "18_345_31",
-      "dictionary_name": "BT4_lorsa_L9A_k30_e16",
-      "feature_index": 345,
-      "layer": 9,
-      "feature_type": "lorsa",
-      "token_position": 31,
-      "board_square": "g6",
-      "activation": 3.299818515777588,
-      "taxonomy": "Tac",
-      "interpretation": "[Tac] LoRSA h4->g6 lookahead read: future rook-line endpoint h4 is read into the current Ng6 target square.",
-      "metadata": {
-        "feature_index_in_circuit": 247,
-        "influence": 0.6937418580055237,
-        "prompt_piece": "P",
-        "prompt_piece_semantic": "OwnPawn",
-        "taxonomy_confidence": 0.52,
-        "taxonomy_rationale": "Activated squares, move evidence, z-pattern, and connected inputs (17_8745_55 w=-1.65) do not yield a stable chess relation.",
-        "evidence_summary": "top squares g4:3, h5:2, g5:2, h4:2, d7:1; piece pattern {'empty': 15, 'OwnKnight': 1}; move hits src=1, tgt=3, total=30; z-src {'empty': 16, 'OwnKnight': 1}; upstream: 17_8745_55 w=-1.65.",
-        "top_evidence_squares": [
-          "g4",
-          "g6",
-          "h5",
-          "g5",
-          "h4",
-          "d7",
-          "e8",
-          "c8"
-        ],
-        "taxonomy_override": "Uninterpretable->Tac",
-        "taxonomy_override_reason": "Raw LoRSA z-pairs include h4->g6 in a top activation sample with f3h4 as a candidate future rook endpoint, giving a concrete lookahead-to-target relation.",
-        "rule_evidence": "top_z_pairs include h4->g6 and nearby g5/g3/g4/f4 -> g6 writes; top moves include f3h4.",
-        "selected_z_pairs": [
-          {
-            "pair": "g5->g6",
-            "value": 7.708298,
-            "sample_top_moves": [
-              "h6g7",
-              "g3f5",
-              "f3h4",
-              "d3e4",
-              "f1d1"
-            ],
-            "sample_fen": "r2qr1k1/1b3pb1/p4npB/np2p3/4p3/2PB1NNP/PP1Q1PP1/R4RK1 w - - 0 19"
-          },
-          {
-            "pair": "g3->g6",
-            "value": 2.160231,
-            "sample_top_moves": [
-              "h6g7",
-              "g3f5",
-              "f3h4",
-              "d3e4",
-              "f1d1"
-            ],
-            "sample_fen": "r2qr1k1/1b3pb1/p4npB/np2p3/4p3/2PB1NNP/PP1Q1PP1/R4RK1 w - - 0 19"
-          },
-          {
-            "pair": "h4->g6",
-            "value": 2.15001,
-            "sample_top_moves": [
-              "h6g7",
-              "g3f5",
-              "f3h4",
-              "d3e4",
-              "f1d1"
-            ],
-            "sample_fen": "r2qr1k1/1b3pb1/p4npB/np2p3/4p3/2PB1NNP/PP1Q1PP1/R4RK1 w - - 0 19"
-          },
-          {
-            "pair": "g4->g6",
-            "value": 1.824162,
-            "sample_top_moves": [
-              "h6g7",
-              "g3f5",
-              "f3h4",
-              "d3e4",
-              "f1d1"
-            ],
-            "sample_fen": "r2qr1k1/1b3pb1/p4npB/np2p3/4p3/2PB1NNP/PP1Q1PP1/R4RK1 w - - 0 19"
-          },
-          {
-            "pair": "f4->g6",
-            "value": 1.127551,
-            "sample_top_moves": [
-              "h6g7",
-              "g3f5",
-              "f3h4",
-              "d3e4",
-              "f1d1"
-            ],
-            "sample_fen": "r2qr1k1/1b3pb1/p4npB/np2p3/4p3/2PB1NNP/PP1Q1PP1/R4RK1 w - - 0 19"
-          }
-        ]
-      }
-    },
-    {
-      "feature_id": "26_13031_46",
-      "node_id": "26_13031_46",
-      "dictionary_name": "BT4_lorsa_L13A_k30_e16",
-      "feature_index": 13031,
-      "layer": 13,
-      "feature_type": "lorsa",
-      "token_position": 46,
-      "board_square": "g6",
-      "activation": 2.681837320327759,
-      "taxonomy": "Tac",
-      "interpretation": "[Tac] LoRSA h4->g6 target update: h4/e7 future endpoints write into current target g6.",
-      "metadata": {
-        "feature_index_in_circuit": 341,
-        "influence": 0.22601819038391113,
-        "prompt_piece": null,
-        "prompt_piece_semantic": null,
-        "taxonomy_confidence": 0.52,
-        "taxonomy_rationale": "Activated squares, move evidence, z-pattern, and connected inputs (25_15847_61 w=-0.835; BT4_tc_L12M_k30_e16#8548[unlabeled] w=0.751) do not yield a stable chess relation.",
-        "evidence_summary": "top squares g6:2, b3:2, d2:2, c4:2, b2:2; piece pattern {'empty': 15, 'OpponentPawn': 3}; move hits src=0, tgt=9, total=30; z-src {'empty': 16, 'OpponentPawn': 2}; upstream: 25_15847_61 w=-0.835; BT4_tc_L12M_k30_e16#8548[unlabeled] w=0.751.",
-        "top_evidence_squares": [
-          "g6",
-          "g2",
-          "e5",
-          "d7",
-          "b3",
-          "d2",
-          "c4",
-          "b2"
-        ],
-        "taxonomy_override": "Uninterpretable->Tac",
-        "taxonomy_override_reason": "Raw LoRSA z-pairs strongly include h4->g6 at the target position, supporting a concrete future-endpoint-to-current-target rule.",
-        "rule_evidence": "top_z_pairs include h4->g6 with value 7.212613 and e7->g6 with value 7.136141; top moves include f5h4.",
-        "selected_z_pairs": [
-          {
-            "pair": "h4->g6",
-            "value": 7.212613,
-            "sample_top_moves": [
-              "f5h4",
-              "f5e7",
-              "g3f3",
-              "g3f2",
-              "g3f4"
-            ],
-            "sample_fen": "8/8/6p1/2p2NP1/2p5/3k2K1/8/8 w - - 1 85"
-          },
-          {
-            "pair": "e7->g6",
-            "value": 7.136141,
-            "sample_top_moves": [
-              "f5h4",
-              "f5e7",
-              "g3f3",
-              "g3f2",
-              "g3f4"
-            ],
-            "sample_fen": "8/8/6p1/2p2NP1/2p5/3k2K1/8/8 w - - 1 85"
-          },
-          {
-            "pair": "d5->g6",
-            "value": 1.684411,
-            "sample_top_moves": [
-              "f5h4",
-              "f5e7",
-              "g3f3",
-              "g3f2",
-              "g3f4"
-            ],
-            "sample_fen": "8/8/6p1/2p2NP1/2p5/3k2K1/8/8 w - - 1 85"
-          },
-          {
-            "pair": "g2->g6",
-            "value": 1.59012,
-            "sample_top_moves": [
-              "f5h4",
-              "f5e7",
-              "g3f3",
-              "g3f2",
-              "g3f4"
-            ],
-            "sample_fen": "8/8/6p1/2p2NP1/2p5/3k2K1/8/8 w - - 1 85"
-          }
-        ]
-      }
     }
   ],
-  "child_feature_edges": [],
+  "child_feature_edges": [
+    {
+      "edge_id": "fe_151_5_14414_46__6_14929_55",
+      "source": "5_14414_46",
+      "target": "6_14929_55",
+      "weight": 1.3650202751159668,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_354_15_3804_63__28_3897_46",
+      "source": "15_3804_63",
+      "target": "28_3897_46",
+      "weight": 0.05205158516764641,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_569_4_5105_46__5_14414_46",
+      "source": "4_5105_46",
+      "target": "5_14414_46",
+      "weight": 0.7029995322227478,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_836_12_2968_55__13_7167_55",
+      "source": "12_2968_55",
+      "target": "13_7167_55",
+      "weight": 1.8505544662475586,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_890_13_3210_58__15_6310_58",
+      "source": "13_3210_58",
+      "target": "15_6310_58",
+      "weight": 2.591136932373047,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_1349_28_10843_29__29_10632_29",
+      "source": "28_10843_29",
+      "target": "29_10632_29",
+      "weight": 0.6418819427490234,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    },
+    {
+      "edge_id": "fe_1414_28_8748_46__29_1214_46",
+      "source": "28_8748_46",
+      "target": "29_1214_46",
+      "weight": 0.17180585861206055,
+      "label": "direct circuit link",
+      "relation_type": "feature_to_feature"
+    }
+  ],
   "semantic_supernodes": [
     {
       "supernode_id": "sn_det_h7_pawn",
-      "role_id": "Det:h7@9",
+      "role_id": "Det1:h7",
       "semantic_type": "Det",
-      "label": "Opp h7 pawn shield",
-      "interpretation": "Input-token detector for the h7 pawn shield that constrains whether g6 is a viable checking square.",
+      "label": "Opponent h7 pawn shield",
+      "interpretation": "Pawn/context detectors for the h7/g7 pawn shield that constrains the Ng6+ checking square.",
       "position": {
-        "token_position": 9,
+        "token_position": null,
         "board_square": "h7",
         "board_squares": [
-          "h7"
+          "h7",
+          "g7",
+          "g6",
+          "h6"
         ]
       },
       "member_feature_ids": [
-        "E_9_9"
+        "E_9_9",
+        "0_1338_54",
+        "6_14929_55",
+        "6_14875_55",
+        "13_7167_55"
       ],
       "visual": {
         "column": 0,
@@ -3796,59 +3675,31 @@
       },
       "metadata": {
         "member_token_positions": [
-          9
-        ],
-        "rule_hypothesis": "The h7 pawn is part of the opponent king shield; its presence helps determine whether Ng6+ is defended or tactically forcing.",
-        "feature_alignment": {
-          "E_9_9": "The feature interpretation explicitly marks the input-token context for the opponent h7 pawn shield, matching this detector role."
-        }
+          9,
+          54,
+          55
+        ]
       }
     },
     {
       "supernode_id": "sn_det_f4_knight",
-      "role_id": "Det:Nf4@25",
+      "role_id": "Det2:Nf4",
       "semantic_type": "Det",
       "label": "Own knight on f4",
-      "interpretation": "Input-token detector for the knight that can jump to g6.",
+      "interpretation": "Source-piece context and detectors for the knight that jumps to g6.",
       "position": {
-        "token_position": 25,
+        "token_position": null,
         "board_square": "f4",
         "board_squares": [
-          "f4"
+          "f4",
+          "g6"
         ]
       },
       "member_feature_ids": [
-        "E_25_25"
-      ],
-      "visual": {
-        "column": 0,
-        "row": 1
-      },
-      "metadata": {
-        "member_token_positions": [
-          25
-        ],
-        "rule_hypothesis": "The own knight on f4 is the source piece for the candidate checking move Ng6+.",
-        "feature_alignment": {
-          "E_25_25": "The feature interpretation explicitly identifies the own knight on f4 as the source piece of Ng6+."
-        }
-      }
-    },
-    {
-      "supernode_id": "sn_det_d4_rook",
-      "role_id": "Det:Rd4@23",
-      "semantic_type": "Det",
-      "label": "Own rook on d4",
-      "interpretation": "Input-token detector for the rook that supplies later rank/file pressure.",
-      "position": {
-        "token_position": 23,
-        "board_square": "d4",
-        "board_squares": [
-          "d4"
-        ]
-      },
-      "member_feature_ids": [
-        "E_23_23"
+        "E_25_25",
+        "0_7091_29",
+        "4_5105_46",
+        "28_10843_29"
       ],
       "visual": {
         "column": 0,
@@ -3856,29 +3707,33 @@
       },
       "metadata": {
         "member_token_positions": [
-          23
-        ],
-        "rule_hypothesis": "The own rook on d4 is the line piece whose future endpoint can create a checking or deflection motif after the knight move.",
-        "feature_alignment": {
-          "E_23_23": "The feature interpretation explicitly identifies the own rook on d4 as a file/rank attacking piece."
-        }
+          25,
+          29,
+          46
+        ]
       }
     },
     {
-      "supernode_id": "sn_det_b3_queen",
-      "role_id": "Det:Qb3@29",
+      "supernode_id": "sn_det_d4_rook",
+      "role_id": "Det3:Rd4",
       "semantic_type": "Det",
-      "label": "Own queen on b3",
-      "interpretation": "Input-token detector for the queen participating in back-rank control.",
+      "label": "Own rook on d4",
+      "interpretation": "Rook context for file/rank pressure on the opponent king after deflection.",
       "position": {
-        "token_position": 29,
-        "board_square": "b3",
+        "token_position": null,
+        "board_square": "d4",
         "board_squares": [
-          "b3"
+          "d4",
+          "d8",
+          "h8"
         ]
       },
       "member_feature_ids": [
-        "E_29_29"
+        "E_23_23",
+        "4_2147_58",
+        "6_11384_61",
+        "5_8360_61",
+        "15_6310_58"
       ],
       "visual": {
         "column": 0,
@@ -3886,28 +3741,125 @@
       },
       "metadata": {
         "member_token_positions": [
-          29
-        ],
-        "rule_hypothesis": "The queen on b3 contributes back-rank and escape-square control, especially around g8/h7 in the Ng6+ tactic.",
-        "feature_alignment": {
-          "E_29_29": "The feature interpretation explicitly marks the own queen on b3 as supporting queen-line control."
-        }
+          23,
+          58,
+          61
+        ]
+      }
+    },
+    {
+      "supernode_id": "sn_det_b3_queen",
+      "role_id": "Det4:Qb3",
+      "semantic_type": "Det",
+      "label": "Own queen on b3",
+      "interpretation": "Queen context supporting control of g8 and the back-rank escape net.",
+      "position": {
+        "token_position": null,
+        "board_square": "b3",
+        "board_squares": [
+          "b3",
+          "g8",
+          "h8"
+        ]
+      },
+      "member_feature_ids": [
+        "E_29_29",
+        "5_14414_46",
+        "29_5003_29",
+        "29_4739_29"
+      ],
+      "visual": {
+        "column": 0,
+        "row": 4
+      },
+      "metadata": {
+        "member_token_positions": [
+          29,
+          46
+        ]
+      }
+    },
+    {
+      "supernode_id": "sn_mov_rook_file_attack",
+      "role_id": "Mov1:Rd4-file",
+      "semantic_type": "Mov",
+      "label": "Potential rook file-wise attack on opponent king",
+      "interpretation": "Movement/control features for a rook or line piece creating file/rank pressure against the opponent king.",
+      "position": {
+        "token_position": 31,
+        "board_square": "d4",
+        "board_squares": [
+          "d4",
+          "d8",
+          "h8",
+          "a8",
+          "c8"
+        ]
+      },
+      "member_feature_ids": [
+        "21_2006_31",
+        "10_10127_31"
+      ],
+      "visual": {
+        "column": 1,
+        "row": 2
+      },
+      "metadata": {
+        "member_token_positions": [
+          31
+        ]
+      }
+    },
+    {
+      "supernode_id": "sn_mov_queen_g8",
+      "role_id": "Mov2:Qb3-g8",
+      "semantic_type": "Mov",
+      "label": "Queen control @ g8",
+      "interpretation": "Queen-line control over g8, restricting the opponent king escape square.",
+      "position": {
+        "token_position": null,
+        "board_square": "g8",
+        "board_squares": [
+          "g8",
+          "b3",
+          "h8"
+        ]
+      },
+      "member_feature_ids": [
+        "29_5003_29",
+        "29_4739_29",
+        "13_3210_58",
+        "5_14414_46"
+      ],
+      "visual": {
+        "column": 1,
+        "row": 5
+      },
+      "metadata": {
+        "member_token_positions": [
+          29,
+          58,
+          46
+        ]
       }
     },
     {
       "supernode_id": "sn_mov_knight_g6",
-      "role_id": "Mov:Nf4-g6@46",
+      "role_id": "Mov3:Nf4-g6",
       "semantic_type": "Mov",
-      "label": "Knight f4->g6 check square",
-      "interpretation": "Movement/check-square features at target-position 46 supporting the knight jump into g6.",
+      "label": "Knight f4→g6 checking jump",
+      "interpretation": "Movement/check-square features supporting the knight jump from f4 to g6.",
       "position": {
-        "token_position": 46,
+        "token_position": null,
         "board_square": "g6",
         "board_squares": [
-          "g6"
+          "g6",
+          "f4",
+          "h7"
         ]
       },
       "member_feature_ids": [
+        "0_1361_54",
         "10_10672_46",
         "10_10630_46",
         "0_7719_46",
@@ -3919,158 +3871,122 @@
       },
       "metadata": {
         "member_token_positions": [
+          54,
           46
-        ],
-        "rule_hypothesis": "At the g6 target position, movement and check-square features mark g6 as a reachable knight-check destination from f4.",
-        "feature_alignment": {
-          "10_10672_46": "Its interpretation says reachable/check-square movement; its top evidence includes h5/f5/g4/g5/f6/h6/g6 around the knight-check neighborhood.",
-          "10_10630_46": "Its interpretation says reachable/check-square movement and its top evidence includes f4, h4, g3, and g6, matching the f4-to-g6 candidate geometry.",
-          "0_7719_46": "Its interpretation is target-anchored potential own-knight check squares, directly matching the g6 target-square movement role.",
-          "24_13504_46": "Its interpretation is potential own-knight check squares, so it supports the rule that g6 is a knight-check destination."
-        }
+        ]
       }
     },
     {
       "supernode_id": "sn_tac_pawn_defense",
-      "role_id": "Tac:g6-defended@55",
+      "role_id": "Tac1:g6-defended",
       "semantic_type": "Tac",
-      "label": "h7/g7 pawn shield defends g6",
-      "interpretation": "Pawn-defense tactical feature at position 55 linking the opponent pawn shield to the g6 check square.",
+      "label": "Defended g6 check-square",
+      "interpretation": "Tactical integration of the pawn shield and defended/check-adjacent squares around g6.",
       "position": {
-        "token_position": 55,
+        "token_position": null,
         "board_square": "g6",
         "board_squares": [
-          "g6"
+          "g6",
+          "h7",
+          "g7",
+          "h6"
         ]
       },
       "member_feature_ids": [
         "12_2968_55",
+        "14_6874_62",
         "13_7167_55"
       ],
       "visual": {
         "column": 2,
-        "row": 0
+        "row": 1
       },
       "metadata": {
         "member_token_positions": [
-          55
-        ],
-        "rule_hypothesis": "Opponent pawns around h7/g7 are read as defenders or constraints on the own knight check square g6.",
-        "feature_alignment": {
-          "12_2968_55": "Its interpretation explicitly says opponent pawn defending own check square, matching the h7/g7-to-g6 defense hypothesis.",
-          "13_7167_55": "Although detection-like, its interpretation says opponent-pawn activation receives relational tactical inputs, so it aligns as pawn-shield tactical context rather than a pure detector."
-        }
+          55,
+          62
+        ]
       }
     },
     {
       "supernode_id": "sn_tac_rook_queen_line",
-      "role_id": "Tac:RQ-line@31",
+      "role_id": "Tac3:RQ-line",
       "semantic_type": "Tac",
-      "label": "Rook/queen two-ply check line",
-      "interpretation": "Tactical features at position 31 representing knight-sac deflection and rook/queen line pressure.",
+      "label": "Rook/queen line pressure",
+      "interpretation": "Line-pressure reasoning: rook/queen motifs can create a checking line against the opponent king after deflection/lookahead.",
       "position": {
         "token_position": 31,
-        "board_square": "h4",
+        "board_square": "h8",
         "board_squares": [
-          "h4"
+          "h8",
+          "d8",
+          "a8",
+          "c8",
+          "g8"
         ]
       },
       "member_feature_ids": [
-        "10_10127_31",
-        "21_2006_31"
+        "21_2006_31",
+        "10_10127_31"
       ],
       "visual": {
         "column": 2,
-        "row": 2
-      },
-      "metadata": {
-        "member_token_positions": [
-          31
-        ],
-        "rule_hypothesis": "The circuit represents a two-ply motif where the knight move exposes or enables rook/queen checking lines against the opponent king.",
-        "feature_alignment": {
-          "10_10127_31": "Its interpretation explicitly says knight-sac deflection exposing rook/queen check, matching the two-ply line-pressure rule.",
-          "21_2006_31": "Although auto-proposed as Reg, its back-rank/edge-square evidence matches rook/queen lines that can give check within two moves, so it aligns with line pressure rather than register state."
-        }
-      }
-    },
-    {
-      "supernode_id": "sn_tac_h4_to_g6_read",
-      "role_id": "Tac:h4->g6@31",
-      "semantic_type": "Tac",
-      "label": "Read rook endpoint h4 into g6",
-      "interpretation": "LoRSA lookahead feature at position 31 reading future endpoint h4 into the current target square g6.",
-      "position": {
-        "token_position": 31,
-        "board_square": "g6",
-        "board_squares": [
-          "g6"
-        ]
-      },
-      "member_feature_ids": [
-        "18_345_31"
-      ],
-      "visual": {
-        "column": 3,
-        "row": 2
-      },
-      "metadata": {
-        "member_token_positions": [
-          31
-        ],
-        "rule_hypothesis": "A LoRSA z-pattern from future rook endpoint h4 to current target g6 carries lookahead line information into the Ng6+ target decision.",
-        "feature_alignment": {
-          "18_345_31": "The raw evidence has top z-pairs h4->g6 along with g5/g3/g4/f4->g6, and top moves include f3h4, so the feature aligns with reading a future h4 endpoint into g6."
-        }
-      }
-    },
-    {
-      "supernode_id": "sn_tac_h4_to_g6_target",
-      "role_id": "Tac:h4->g6@46",
-      "semantic_type": "Tac",
-      "label": "Apply h4->g6 target update",
-      "interpretation": "Target-position LoRSA feature applying future endpoint information to the g6 action square.",
-      "position": {
-        "token_position": 46,
-        "board_square": "g6",
-        "board_squares": [
-          "g6"
-        ]
-      },
-      "member_feature_ids": [
-        "26_13031_46"
-      ],
-      "visual": {
-        "column": 3,
         "row": 3
       },
       "metadata": {
         "member_token_positions": [
-          46
-        ],
-        "rule_hypothesis": "At the g6 target position, strong h4->g6 LoRSA evidence updates the current move target using a looked-ahead rook/line endpoint.",
-        "feature_alignment": {
-          "26_13031_46": "The raw evidence has a strong h4->g6 z-pair with value 7.212613 and top moves including f5h4, directly matching the future-endpoint-to-current-target rule."
-        }
+          31
+        ]
       }
     },
     {
-      "supernode_id": "sn_src_f4",
-      "role_id": "Src:f4@29",
-      "semantic_type": "Src",
-      "label": "Final move source f4",
-      "interpretation": "Late policy source features selecting the f4 source for Ng6+.",
+      "supernode_id": "sn_tac_check_integration",
+      "role_id": "Tac2:check-integration",
+      "semantic_type": "Tac",
+      "label": "Check-square reasoning integration",
+      "interpretation": "Combines movement and defense evidence into the tactical claim that Ng6+ works.",
       "position": {
-        "token_position": 29,
-        "board_square": "f4",
+        "token_position": null,
+        "board_square": "g6",
         "board_squares": [
-          "f4"
+          "g6",
+          "f4",
+          "h8"
         ]
       },
       "member_feature_ids": [
-        "19_7158_29",
-        "21_11362_29",
-        "29_10632_29"
+        "24_13504_46",
+        "12_15643_31"
+      ],
+      "visual": {
+        "column": 3,
+        "row": 2
+      },
+      "metadata": {
+        "member_token_positions": [
+          46,
+          31
+        ]
+      }
+    },
+    {
+      "supernode_id": "sn_tac_second_move",
+      "role_id": "Tac4:lookahead",
+      "semantic_type": "Tac",
+      "label": "Read from second-move lookahead",
+      "interpretation": "Higher-level lookahead/feedback node that reads the second-move threat and feeds the final action target.",
+      "position": {
+        "token_position": null,
+        "board_square": "g8",
+        "board_squares": [
+          "g8",
+          "h8",
+          "g6"
+        ]
+      },
+      "member_feature_ids": [
+        "15_3804_63",
+        "24_13504_46"
       ],
       "visual": {
         "column": 4,
@@ -4078,27 +3994,53 @@
       },
       "metadata": {
         "member_token_positions": [
+          63,
+          46
+        ]
+      }
+    },
+    {
+      "supernode_id": "sn_src_f4",
+      "role_id": "Src1:f4",
+      "semantic_type": "Src",
+      "label": "Move source f4",
+      "interpretation": "Action-origin/source features for the final knight move from f4.",
+      "position": {
+        "token_position": 29,
+        "board_square": "f4",
+        "board_squares": [
+          "f4",
+          "g6"
+        ]
+      },
+      "member_feature_ids": [
+        "19_7158_29",
+        "21_11362_29",
+        "28_13387_29",
+        "29_10632_29"
+      ],
+      "visual": {
+        "column": 5,
+        "row": 2
+      },
+      "metadata": {
+        "member_token_positions": [
           29
-        ],
-        "rule_hypothesis": "Late source features at position 29 select the f4 knight as the origin of the final move.",
-        "feature_alignment": {
-          "19_7158_29": "Its interpretation is a late-layer policy source feature and its evidence has f4 among top squares, matching the final source f4.",
-          "21_11362_29": "Its interpretation is a late-layer policy source feature and its top evidence includes f4, matching the selected source square.",
-          "29_10632_29": "It is an existing source feature whose evidence includes f4 among top squares, aligning with the source side of Ng6+."
-        }
+        ]
       }
     },
     {
       "supernode_id": "sn_tgt_g6",
-      "role_id": "Tgt:g6@46",
+      "role_id": "Tgt1:g6",
       "semantic_type": "Tgt",
-      "label": "Final move target g6",
-      "interpretation": "Late policy target features selecting g6 as the final move destination.",
+      "label": "Move target g6",
+      "interpretation": "Target/action features corresponding to the final move target g6.",
       "position": {
         "token_position": 46,
         "board_square": "g6",
         "board_squares": [
-          "g6"
+          "g6",
+          "f4"
         ]
       },
       "member_feature_ids": [
@@ -4108,120 +4050,158 @@
         "29_1214_46"
       ],
       "visual": {
-        "column": 4,
-        "row": 3
+        "column": 5,
+        "row": 1
       },
       "metadata": {
         "member_token_positions": [
           46
-        ],
-        "rule_hypothesis": "Late target features at position 46 bind the final action destination to g6 for Ng6+.",
-        "feature_alignment": {
-          "18_11609_46": "Its interpretation is a late-layer policy target feature and its evidence includes destination/check-neighborhood squares around f6/e4/f5, consistent with g6 target selection.",
-          "28_8748_46": "Its interpretation is a late-layer policy target feature and its evidence has repeated destination hits, so it belongs to the final target bundle.",
-          "28_3897_46": "Its interpretation is a late-layer policy target feature and its top evidence includes g6 and g8, matching the checking target neighborhood.",
-          "29_1214_46": "Its existing interpretation is Target square and top evidence includes g6, directly matching the final target role."
-        }
+        ]
       }
     }
   ],
   "semantic_edges": [
     {
-      "edge_id": "se_v4_00_sn_det_h7_pawn__sn_tac_pawn_defense",
+      "edge_id": "se_v3_00_sn_det_h7_pawn__sn_mov_knight_g6",
+      "source": "sn_det_h7_pawn",
+      "target": "sn_mov_knight_g6",
+      "weight": 0.18,
+      "label": "pawn shield conditions knight checking jump",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_01_sn_det_h7_pawn__sn_tac_pawn_defense",
       "source": "sn_det_h7_pawn",
       "target": "sn_tac_pawn_defense",
-      "weight": 0.42,
-      "label": "h7/g7 pawn shield feeds defended-square reasoning",
+      "weight": 0.18,
+      "label": "pawn shield feeds defended-square reasoning",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_01_sn_det_f4_knight__sn_mov_knight_g6",
+      "edge_id": "se_v3_02_sn_det_f4_knight__sn_mov_knight_g6",
       "source": "sn_det_f4_knight",
       "target": "sn_mov_knight_g6",
-      "weight": 0.55,
-      "label": "source knight enables candidate g6 check jump",
+      "weight": 0.22,
+      "label": "source knight enables checking jump",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_02_sn_det_d4_rook__sn_tac_rook_queen_line",
+      "edge_id": "se_v3_03_sn_det_f4_knight__sn_src_f4",
+      "source": "sn_det_f4_knight",
+      "target": "sn_src_f4",
+      "weight": 0.18,
+      "label": "source-piece context feeds source action",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_04_sn_det_d4_rook__sn_mov_rook_file_attack",
       "source": "sn_det_d4_rook",
-      "target": "sn_tac_rook_queen_line",
-      "weight": 0.38,
-      "label": "rook context supports two-ply line pressure",
+      "target": "sn_mov_rook_file_attack",
+      "weight": 0.2,
+      "label": "rook context feeds file-wise attack",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_03_sn_det_b3_queen__sn_tac_rook_queen_line",
+      "edge_id": "se_v3_05_sn_det_b3_queen__sn_mov_queen_g8",
       "source": "sn_det_b3_queen",
+      "target": "sn_mov_queen_g8",
+      "weight": 0.2,
+      "label": "queen context feeds g8 control",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_06_sn_mov_knight_g6__sn_tac_pawn_defense",
+      "source": "sn_mov_knight_g6",
+      "target": "sn_tac_pawn_defense",
+      "weight": 0.22,
+      "label": "candidate move becomes defended check-square reasoning",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_07_sn_mov_knight_g6__sn_tac_check_integration",
+      "source": "sn_mov_knight_g6",
+      "target": "sn_tac_check_integration",
+      "weight": 0.22,
+      "label": "candidate move feeds check integration",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_08_sn_mov_rook_file_attack__sn_tac_rook_queen_line",
+      "source": "sn_mov_rook_file_attack",
       "target": "sn_tac_rook_queen_line",
-      "weight": 0.34,
-      "label": "queen context supports back-rank line pressure",
+      "weight": 0.24,
+      "label": "file-wise pressure becomes tactical line threat",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_04_sn_mov_knight_g6__sn_tac_h4_to_g6_target",
-      "source": "sn_mov_knight_g6",
-      "target": "sn_tac_h4_to_g6_target",
-      "weight": 0.48,
-      "label": "candidate g6 move is updated by lookahead evidence",
+      "edge_id": "se_v3_09_sn_mov_queen_g8__sn_tgt_g6",
+      "source": "sn_mov_queen_g8",
+      "target": "sn_tgt_g6",
+      "weight": 0.18,
+      "label": "queen control supports target action",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_05_sn_tac_pawn_defense__sn_tac_h4_to_g6_target",
+      "edge_id": "se_v3_10_sn_mov_queen_g8__sn_tac_second_move",
+      "source": "sn_mov_queen_g8",
+      "target": "sn_tac_second_move",
+      "weight": 0.22,
+      "label": "queen g8 control feeds lookahead",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_11_sn_tac_pawn_defense__sn_tac_check_integration",
       "source": "sn_tac_pawn_defense",
-      "target": "sn_tac_h4_to_g6_target",
-      "weight": 0.31,
-      "label": "defended-square evidence constrains the target update",
+      "target": "sn_tac_check_integration",
+      "weight": 0.18,
+      "label": "defense evidence integrates into check-square reasoning",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_06_sn_tac_rook_queen_line__sn_tac_h4_to_g6_read",
+      "edge_id": "se_v3_12_sn_tac_check_integration__sn_tac_second_move",
+      "source": "sn_tac_check_integration",
+      "target": "sn_tac_second_move",
+      "weight": 0.18,
+      "label": "check-square reasoning feeds lookahead",
+      "relation_type": "semantic_indirect",
+      "member_edge_ids": []
+    },
+    {
+      "edge_id": "se_v3_13_sn_tac_rook_queen_line__sn_tac_second_move",
       "source": "sn_tac_rook_queen_line",
-      "target": "sn_tac_h4_to_g6_read",
-      "weight": 0.58,
-      "label": "two-ply line motif supplies the h4 endpoint read",
+      "target": "sn_tac_second_move",
+      "weight": 0.2,
+      "label": "line threat is read from second-move lookahead",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_07_sn_tac_h4_to_g6_read__sn_tac_h4_to_g6_target",
-      "source": "sn_tac_h4_to_g6_read",
-      "target": "sn_tac_h4_to_g6_target",
-      "weight": 0.62,
-      "label": "h4->g6 read is applied at the target position",
-      "relation_type": "semantic_indirect",
-      "member_edge_ids": []
-    },
-    {
-      "edge_id": "se_v4_08_sn_tac_h4_to_g6_target__sn_tgt_g6",
-      "source": "sn_tac_h4_to_g6_target",
+      "edge_id": "se_v3_14_sn_tac_second_move__sn_tgt_g6",
+      "source": "sn_tac_second_move",
       "target": "sn_tgt_g6",
-      "weight": 0.68,
-      "label": "lookahead target update supports final g6 target",
+      "weight": 0.22,
+      "label": "lookahead-to-target feedback",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     },
     {
-      "edge_id": "se_v4_09_sn_mov_knight_g6__sn_tgt_g6",
-      "source": "sn_mov_knight_g6",
-      "target": "sn_tgt_g6",
-      "weight": 0.52,
-      "label": "candidate knight-check square supports final target",
-      "relation_type": "semantic_indirect",
-      "member_edge_ids": []
-    },
-    {
-      "edge_id": "se_v4_10_sn_src_f4__sn_tgt_g6",
+      "edge_id": "se_v3_15_sn_src_f4__sn_tgt_g6",
       "source": "sn_src_f4",
       "target": "sn_tgt_g6",
-      "weight": 0.72,
-      "label": "source-to-target action binding f4->g6",
+      "weight": 0.24,
+      "label": "source-to-target action binding",
       "relation_type": "semantic_indirect",
       "member_edge_ids": []
     }

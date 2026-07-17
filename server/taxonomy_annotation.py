@@ -975,7 +975,15 @@ def get_circuit_taxonomy_router(
             "updated_at": state["updated_at"],
         }
 
-    def annotate_feature_item(dictionary_name: str, feature_index: int, taxonomy: str, overwrite: bool) -> dict[str, Any]:
+    def annotate_feature_item(
+        dictionary_name: str,
+        feature_index: int,
+        taxonomy: str,
+        overwrite: bool,
+        rationale: str | None = None,
+        confidence: float | None = None,
+        source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         try:
             feature_index = int(feature_index)
         except (TypeError, ValueError):
@@ -1023,6 +1031,13 @@ def get_circuit_taxonomy_router(
         new_text = apply_prefix(existing_text, taxonomy)
         updated_interpretation = dict(existing_interpretation or {})
         updated_interpretation["text"] = new_text
+        updated_interpretation["taxonomy"] = taxonomy
+        if rationale is not None:
+            updated_interpretation["rationale"] = str(rationale).strip()
+        if confidence is not None:
+            updated_interpretation["confidence"] = float(confidence)
+        if source is not None:
+            updated_interpretation["source"] = source
         updated_interpretation["method"] = updated_interpretation.get("method") or "taxonomy_label"
         updated_interpretation["validation"] = updated_interpretation.get("validation") or []
 
@@ -1062,6 +1077,9 @@ def get_circuit_taxonomy_router(
             feature_index=feature_index,
             taxonomy=taxonomy,
             overwrite=overwrite,
+            rationale=request.get("rationale"),
+            confidence=request.get("confidence"),
+            source=request.get("source"),
         )
 
     @router.post("/circuit_taxonomy/annotate_batch")
@@ -1100,6 +1118,9 @@ def get_circuit_taxonomy_router(
                     feature_index=feature_index,
                     taxonomy=taxonomy,
                     overwrite=overwrite,
+                    rationale=raw_item.get("rationale"),
+                    confidence=raw_item.get("confidence"),
+                    source=raw_item.get("source"),
                 )
                 status = str(result.get("status", "updated"))
                 counts[status] = counts.get(status, 0) + 1

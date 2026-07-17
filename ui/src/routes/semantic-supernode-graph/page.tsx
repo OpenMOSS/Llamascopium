@@ -31,11 +31,13 @@ import {
   SemanticSupernode,
   SemanticSupernodeGraph,
 } from "@/types/semantic-supernode-graph";
+import { Maximize2, Minimize2 } from "lucide-react";
 
 type SemanticNodeData = {
   supernode: SemanticSupernode;
   childCount: number;
   selected: boolean;
+  dimmed: boolean;
 };
 
 const DEFAULT_SEMANTIC_GRAPH_PATH = "scripts/Attribution_Graph/semantic_supernode_examples/lookingahead_k30_e16.semantic_supernodes.json";
@@ -104,7 +106,7 @@ const getTypeColor = (semanticType?: string | null) => {
 };
 
 const SemanticSupernodeCard = ({ data }: NodeProps<ReactFlowNode<SemanticNodeData>>) => {
-  const { supernode, childCount, selected } = data;
+  const { supernode, childCount, selected, dimmed } = data;
   const color = getTypeColor(supernode.semantic_type);
   const square =
     supernode.position?.board_square ||
@@ -118,6 +120,8 @@ const SemanticSupernodeCard = ({ data }: NodeProps<ReactFlowNode<SemanticNodeDat
         borderColor: selected ? "#111827" : color.border,
         background: color.bg,
         color: color.text,
+        opacity: dimmed ? 0.24 : 1,
+        filter: dimmed ? "grayscale(0.9)" : "none",
       }}
     >
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-500" />
@@ -553,13 +557,14 @@ const buildFlowGraph = (
       id: supernode.supernode_id,
       type: "semanticSupernode",
       position: {
-        x: 90 + column * 410 + subcolumn * 245,
+        x: 90 + column * 720 + subcolumn * 440,
         y: 70 + row * 230,
       },
       data: {
         supernode,
         childCount: supernode.member_feature_ids.length,
         selected: selectedId === supernode.supernode_id,
+        dimmed: false,
       },
     };
   });
@@ -608,6 +613,8 @@ export const SemanticSupernodeGraphPage = () => {
   const [isFeatureLoading, setIsFeatureLoading] = useState(false);
   const [selectedTaxonomy, setSelectedTaxonomy] = useState("Det");
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [graphFocusedNodeId, setGraphFocusedNodeId] = useState<string | null>(null);
+  const [isGraphFullscreen, setIsGraphFullscreen] = useState(false);
 
   const selectedSupernode = useMemo(
     () => graph?.semantic_supernodes.find((node) => node.supernode_id === selectedId) || null,
@@ -636,23 +643,52 @@ export const SemanticSupernodeGraphPage = () => {
     () => graph?.semantic_edges.find((edge) => edge.edge_id === selectedEdgeId) || null,
     [graph?.semantic_edges, selectedEdgeId],
   );
+  const displayedFlowNodes = useMemo(
+    () =>
+      flowNodes.map((node) => ({
+        ...node,
+        data: {
+          ...node.data,
+          selected: selectedId === node.id,
+          dimmed: Boolean(graphFocusedNodeId && graphFocusedNodeId !== node.id),
+        },
+      })),
+    [flowNodes, graphFocusedNodeId, selectedId],
+  );
   const displayedFlowEdges = useMemo(
     () =>
-      flowEdges.map((edge) =>
-        edge.id === selectedEdgeId
-          ? {
-              ...edge,
-              style: {
-                ...(edge.style || {}),
-                stroke: "#2563eb",
-                strokeWidth: 6,
-              },
-              animated: true,
-              zIndex: 20,
-            }
-          : edge,
-      ),
-    [flowEdges, selectedEdgeId],
+      flowEdges.map((edge) => {
+        const isSelectedEdge = edge.id === selectedEdgeId;
+        const isConnectedToSelectedNode = Boolean(
+          graphFocusedNodeId && (edge.source === graphFocusedNodeId || edge.target === graphFocusedNodeId),
+        );
+        const isUnrelated = Boolean(graphFocusedNodeId && !isConnectedToSelectedNode);
+        return {
+          ...edge,
+          animated: isSelectedEdge || isConnectedToSelectedNode ? edge.animated : false,
+          zIndex: isSelectedEdge || isConnectedToSelectedNode ? 20 : 0,
+          style: {
+            ...(edge.style || {}),
+            stroke: isSelectedEdge ? "#2563eb" : isUnrelated ? "#cbd5e1" : edge.style?.stroke,
+            strokeOpacity: isUnrelated ? 0.22 : 1,
+            strokeWidth: isSelectedEdge
+              ? 6
+              : isConnectedToSelectedNode
+                ? Math.max(Number(edge.style?.strokeWidth || 2.2), 4)
+                : edge.style?.strokeWidth,
+          },
+          labelStyle: {
+            ...(edge.labelStyle || {}),
+            opacity: isUnrelated ? 0.2 : 1,
+            fill: isUnrelated ? "#94a3b8" : edge.labelStyle?.fill,
+          },
+          labelBgStyle: {
+            ...(edge.labelBgStyle || {}),
+            fillOpacity: isUnrelated ? 0.2 : edge.labelBgStyle?.fillOpacity,
+          },
+        };
+      }),
+    [flowEdges, graphFocusedNodeId, selectedEdgeId],
   );
 
   useEffect(() => {
@@ -665,6 +701,7 @@ export const SemanticSupernodeGraphPage = () => {
     setSelectedId(loaded.semantic_supernodes[0]?.supernode_id || null);
     setSelectedTaxonomy(loaded.semantic_supernodes.find((node) => node.semantic_type === "Det")?.semantic_type || loaded.semantic_supernodes[0]?.semantic_type || "Semantic");
     setSelectedEdgeId(null);
+    setGraphFocusedNodeId(null);
     setSelectedChildFeatureId(null);
     setLoadedFeature(null);
     setFeatureLoadError(null);
@@ -1149,7 +1186,13 @@ export const SemanticSupernodeGraphPage = () => {
         </div>
       </div>
 
-      <div className="mt-3 h-[620px] min-h-[520px] overflow-hidden rounded-lg border bg-white shadow-sm">
+      <div
+        className={`overflow-hidden border bg-white shadow-sm ${
+          isGraphFullscreen
+            ? "fixed inset-3 z-50 mt-0 rounded-lg"
+            : "mt-3 h-[620px] min-h-[520px] rounded-lg"
+        }`}
+      >
         <div className="flex items-center justify-between border-b px-3 py-2">
           <div>
             <div className="text-sm font-semibold">Semantic Supernode Graph</div>
@@ -1157,13 +1200,24 @@ export const SemanticSupernodeGraphPage = () => {
               Drag nodes directly; click edges to inspect labels; drag edge endpoints to adjust local routing.
             </div>
           </div>
-          <div className="text-xs text-slate-500">
-            {flowNodes.length} nodes · {flowEdges.length} edges
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-slate-500">
+              {flowNodes.length} nodes · {flowEdges.length} edges
+            </div>
+            <button
+              type="button"
+              className="inline-flex h-8 w-8 items-center justify-center rounded border bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+              title={isGraphFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              aria-label={isGraphFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              onClick={() => setIsGraphFullscreen((value) => !value)}
+            >
+              {isGraphFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </button>
           </div>
         </div>
         <div className="h-[calc(100%-49px)] min-w-0">
           <ReactFlow
-            nodes={flowNodes}
+            nodes={displayedFlowNodes}
             edges={displayedFlowEdges}
             nodeTypes={nodeTypes}
             onNodesChange={onFlowNodesChange}
@@ -1172,11 +1226,16 @@ export const SemanticSupernodeGraphPage = () => {
             fitViewOptions={{ padding: 0.18 }}
             onNodeClick={(_, node) => {
               setSelectedId(node.id);
+              setGraphFocusedNodeId(node.id);
               const semanticType = node.data?.supernode?.semantic_type || "Semantic";
               setSelectedTaxonomy(semanticType);
               setSelectedEdgeId(null);
             }}
             onEdgeClick={(_, edge) => setSelectedEdgeId(edge.id)}
+            onPaneClick={() => {
+              setGraphFocusedNodeId(null);
+              setSelectedEdgeId(null);
+            }}
             onReconnect={(oldEdge, newConnection) => {
               setFlowEdges((edges) => reconnectEdge(oldEdge, newConnection, edges));
             }}
