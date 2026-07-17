@@ -156,6 +156,7 @@ def run_validation_spec(
             feature=feature,
             rule=build_rule(resolved.rule),
             cases=cases,
+            threshold=resolved.threshold,
             **kwargs,
         )
     return evaluate_feature_rule(

@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
 from .evaluator import collect_feature_activations
-from .types import FeatureSpec, VerificationCase
+from .thresholds import resolve_thresholds
+from .types import FeatureSpec, ThresholdSpec, VerificationCase, VerificationCounts
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ def evaluate_feature_value_rule(
     rule: ValueOutcomeRule,
     cases: Sequence[VerificationCase | str],
     aggregation: Literal["max", "mean"] = "max",
+    threshold: ThresholdSpec | None = None,
     prepend_bos: bool = False,
     show_progress: bool = True,
 ) -> dict[str, Any]:
@@ -56,11 +58,27 @@ def evaluate_feature_value_rule(
         prepend_bos=prepend_bos,
         show_progress=show_progress,
     )
+    threshold = threshold or ThresholdSpec(mode="absolute", value=0.0, scope="dataset")
+    thresholds = resolve_thresholds(activations, threshold)
+    counts = VerificationCounts()
     positives: list[float] = []
     negatives: list[float] = []
-    for case, values in zip(normalized, activations):
+    active_cases = 0
+    for case, values, resolved_threshold in zip(normalized, activations, thresholds):
         score = float(values.max().item() if aggregation == "max" else values.mean().item())
-        (positives if rule.matches(case.metadata) else negatives).append(score)
+        matches = rule.matches(case.metadata)
+        active = score > float(resolved_threshold)
+        if active:
+            active_cases += 1
+        if active and matches:
+            counts.tp += 1
+        elif active:
+            counts.fp += 1
+        elif matches:
+            counts.fn += 1
+        else:
+            counts.tn += 1
+        (positives if matches else negatives).append(score)
     positive_mean = sum(positives) / len(positives) if positives else None
     negative_mean = sum(negatives) / len(negatives) if negatives else None
     return {
@@ -71,6 +89,13 @@ def evaluate_feature_value_rule(
         },
         "rule_name": rule.name,
         "aggregation": aggregation,
+        "threshold": {
+            "mode": threshold.mode,
+            "value": threshold.value,
+            "scope": threshold.scope,
+        },
+        "counts": counts.to_dict(),
+        "n_active_cases": active_cases,
         "n_positive_cases": len(positives),
         "n_negative_cases": len(negatives),
         "mean_activation_positive": positive_mean,
