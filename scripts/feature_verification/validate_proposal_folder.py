@@ -143,6 +143,51 @@ def load_max_activations(
     return maxima
 
 
+def load_max_activations_from_mongo(
+    *,
+    mongo_uri: str,
+    db_name: str,
+    sae_series: str,
+    analysis_name: str,
+    proposal_keys: set[tuple[str, int]],
+) -> dict[tuple[str, int], float]:
+    from pymongo import MongoClient
+
+    indices_by_dictionary: dict[str, list[int]] = {}
+    for dictionary_name, feature_index in proposal_keys:
+        indices_by_dictionary.setdefault(dictionary_name, []).append(feature_index)
+
+    client = MongoClient(mongo_uri)
+    try:
+        client.admin.command("ping")
+        collection = client[db_name]["features"]
+        maxima: dict[tuple[str, int], float] = {}
+        for dictionary_name, feature_indices in sorted(indices_by_dictionary.items()):
+            query = {
+                "sae_name": dictionary_name,
+                "sae_series": sae_series,
+                "index": {"$in": feature_indices},
+                "analyses": {
+                    "$elemMatch": {
+                        "name": analysis_name,
+                        "max_feature_acts": {"$gt": 0},
+                    }
+                },
+            }
+            projection = {"_id": 0, "index": 1, "analyses.name": 1, "analyses.max_feature_acts": 1}
+            for feature in collection.find(query, projection):
+                for analysis in feature.get("analyses") or []:
+                    if analysis.get("name") != analysis_name:
+                        continue
+                    value = analysis.get("max_feature_acts")
+                    if value is not None:
+                        maxima[(dictionary_name, int(feature["index"]))] = float(value)
+                    break
+        return maxima
+    finally:
+        client.close()
+
+
 def _safe_filename(dictionary_name: str, feature_index: int) -> str:
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", dictionary_name)
     return f"{safe_name}__{feature_index}.json"
@@ -622,12 +667,21 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--proposal-dir", type=Path, required=True)
-    parser.add_argument(
+    stats_source = parser.add_mutually_exclusive_group(required=True)
+    stats_source.add_argument(
         "--feature-stats-dir",
         type=Path,
-        required=True,
         help="JSONL source for max_feature_act only; its top-activation FENs are never used.",
     )
+    stats_source.add_argument(
+        "--max-activations-from-mongo",
+        action="store_true",
+        help="Read analyses[].max_feature_acts from MongoDB instead of evidence JSONL.",
+    )
+    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://localhost:27017"))
+    parser.add_argument("--mongo-db", default=os.environ.get("MONGO_DB", "mechinterp"))
+    parser.add_argument("--sae-series", default=os.environ.get("SAE_SERIES", "BT4-exp128"))
+    parser.add_argument("--analysis-name", default=os.environ.get("ANALYSIS_NAME", "default"))
     parser.add_argument("--dataset-path", type=Path, default=DEFAULT_DATASET_PATH)
     parser.add_argument("--dataset-split")
     parser.add_argument("--fen-column", default="fen")
@@ -642,6 +696,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--progress-every", type=int, default=100)
     parser.add_argument("--limit", type=int, help="Validate only the first N eligible unique features.")
+    parser.add_argument("--prepare-only", action="store_true", help="Check proposals, rules, and activation maxima without loading the model.")
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -658,7 +713,16 @@ def main() -> int:
         raise ValueError("--limit must be positive")
 
     proposals = load_proposals(args.proposal_dir)
-    maxima = load_max_activations(args.feature_stats_dir, set(proposals))
+    if args.max_activations_from_mongo:
+        maxima = load_max_activations_from_mongo(
+            mongo_uri=args.mongo_uri,
+            db_name=args.mongo_db,
+            sae_series=args.sae_series,
+            analysis_name=args.analysis_name,
+            proposal_keys=set(proposals),
+        )
+    else:
+        maxima = load_max_activations(args.feature_stats_dir, set(proposals))
     groups, preparation = prepare_groups(
         proposals,
         maxima,
@@ -668,6 +732,8 @@ def main() -> int:
         limit=args.limit,
     )
     print(f"Prepared groups: {preparation}", flush=True)
+    if args.prepare_only:
+        return 1 if preparation["errors"] else 0
     dataset = _load_dataset(args.dataset_path, args.dataset_split)
     completed, unfinished = run_dataset_scan(
         groups,
