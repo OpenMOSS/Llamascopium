@@ -679,7 +679,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-dir", default=None, help="Output directory. Defaults to outputs/circuit_taxonomy_evidence/<directory>/per-circuit-<timestamp>.")
     parser.add_argument("--sae-series", default=os.environ.get("SAE_SERIES"))
-    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://10.244.133.15:27017"))
+    parser.add_argument("--mongo-uri", default=os.environ.get("MONGO_URI", "mongodb://10.244.136.186:27017"))
     parser.add_argument("--mongo-db", default=os.environ.get("MONGO_DB", "mechinterp"))
     parser.add_argument("--mongo-timeout-ms", type=int, default=5000)
     parser.add_argument("--no-mongo-preflight", action="store_true", help="Skip Mongo connectivity and sae_series preflight.")
