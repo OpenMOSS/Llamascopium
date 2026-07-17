@@ -20,6 +20,7 @@ from feature_varification import (
     ThresholdSpec,
     VerificationCase,
     PieceFrontSpanRule,
+    PieceMultiHopDestinationRule,
     evaluate_feature_rule,
 )
 
@@ -57,6 +58,7 @@ from .rules import (
     PieceAttackRule,
     PieceDestinationRule,
     PieceFrontSpanRule,
+    PieceMultiHopDestinationRule,
     PieceNeighborhoodRule,
     PieceRayRule,
     PieceTypeRule,
@@ -112,6 +114,7 @@ __all__ = [
     "PieceAttackRule",
     "PieceDestinationRule",
     "PieceFrontSpanRule",
+    "PieceMultiHopDestinationRule",
     "PieceNeighborhoodRule",
     "PieceRayRule",
     "PieceTypeRule",

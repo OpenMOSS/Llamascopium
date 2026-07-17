@@ -230,6 +230,10 @@ def describe_rule(spec: RuleSpec) -> str:
         "piece_neighborhood": f"Squares adjacent to the {piece_name}.",
         "piece_ray": f"Blocked {params.get('directions', ['line'])[0]} line anchored on the {piece_name}.",
         "piece_front_span": f"The square immediately in front of the {piece_name}.",
+        "piece_multi_hop_destination": (
+            f"Exact {params.get('hops', 2)}-move destinations of the {piece_name}, "
+            f"attending to its {params.get('attended_hop', 1)}-move destinations."
+        ),
         "protected_piece": f"The {piece_name} when defended by another {params.get('protector_owner')} piece.",
         "capturable_piece": f"Opponent pieces immediately attacked by the {piece_name or attacker_side}.",
         "checking_move_destination": f"Legal checking destinations of the {piece_name or 'side-to-move pieces'}.",

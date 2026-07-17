@@ -105,6 +105,41 @@ _RAY_DIRECTION_PRESETS: dict[str, tuple[tuple[int, int], ...]] = {
 }
 
 
+def _geometric_piece_destinations(square: chess.Square, piece_type: chess.PieceType) -> set[chess.Square]:
+    start_file = chess.square_file(square)
+    start_rank = chess.square_rank(square)
+    if piece_type == chess.KNIGHT:
+        deltas = ((1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2))
+        return {
+            chess.square(start_file + df, start_rank + dr)
+            for df, dr in deltas
+            if 0 <= start_file + df < 8 and 0 <= start_rank + dr < 8
+        }
+    if piece_type == chess.KING:
+        deltas = tuple((df, dr) for df in (-1, 0, 1) for dr in (-1, 0, 1) if (df, dr) != (0, 0))
+        return {
+            chess.square(start_file + df, start_rank + dr)
+            for df, dr in deltas
+            if 0 <= start_file + df < 8 and 0 <= start_rank + dr < 8
+        }
+    direction = {
+        chess.BISHOP: "diagonal",
+        chess.ROOK: "orthogonal",
+        chess.QUEEN: "queen",
+    }.get(piece_type)
+    if direction is None:
+        raise ValueError("Blocker-free multi-hop geometry supports bishops, rooks, queens, knights, and kings")
+    result: set[chess.Square] = set()
+    for df, dr in _RAY_DIRECTION_PRESETS[direction]:
+        for step in range(1, 8):
+            file_idx = start_file + df * step
+            rank_idx = start_rank + dr * step
+            if not (0 <= file_idx < 8 and 0 <= rank_idx < 8):
+                break
+            result.add(chess.square(file_idx, rank_idx))
+    return result
+
+
 class VerificationRule(Protocol):
     """Protocol implemented by all feature verification rules."""
 
@@ -650,6 +685,96 @@ class PieceDestinationRule:
             positions.append(_flip_square_for_bt4(board, move.to_square))
 
         return RuleEvaluation(mask=_mask_from_positions(sorted(set(positions))), metadata={"piece_type": self.piece_type})
+
+
+@dataclass(frozen=True)
+class PieceMultiHopDestinationRule:
+    """Match squares reached after repeated moves by the same selected piece.
+
+    The board is updated after each hypothetical move, but the selected piece's
+    side moves again immediately. This models multi-step reachability without
+    inventing an opponent reply. ``attended_hop`` exposes an earlier reachability
+    layer in metadata for LoRSA relations such as second-hop bishop destinations
+    attending to first-hop bishop destinations.
+    """
+
+    piece_type: str
+    hops: int = 2
+    exclude_lower_hops: bool = True
+    attended_hop: int | None = None
+    ignore_blockers_after_first: bool = False
+    name: str | None = None
+    requires_move_uci: bool = False
+
+    def __post_init__(self) -> None:
+        if self.hops < 1:
+            raise ValueError("hops must be at least 1")
+        if self.attended_hop is not None and not (1 <= self.attended_hop < self.hops):
+            raise ValueError("attended_hop must be between 1 and hops - 1")
+        if self.name is None:
+            object.__setattr__(self, "name", f"multi_hop_destinations::{self.piece_type}::h{self.hops}")
+
+    def evaluate(self, fen: str, move_uci: str | None = None) -> RuleEvaluation:
+        board = chess.Board(fen)
+        color, piece_enum = _parse_piece_type(board, self.piece_type)
+        origins = _get_piece_squares(board, self.piece_type)
+        frontier = [(board.copy(stack=False), square) for square in origins]
+        hop_squares: dict[int, set[chess.Square]] = {}
+
+        for hop in range(1, self.hops + 1):
+            next_frontier: list[tuple[chess.Board, chess.Square]] = []
+            reached: set[chess.Square] = set()
+            seen_states: set[tuple[str, chess.Square]] = set()
+            for state, square in frontier:
+                if hop > 1 and self.ignore_blockers_after_first:
+                    for target in _geometric_piece_destinations(square, piece_enum):
+                        reached.add(target)
+                        state_key = (state.fen(), target)
+                        if state_key not in seen_states:
+                            seen_states.add(state_key)
+                            next_frontier.append((state.copy(stack=False), target))
+                    continue
+                state.turn = color
+                from_mask = chess.BB_SQUARES[square]
+                for candidate in state.generate_pseudo_legal_moves(from_mask=from_mask):
+                    moving_piece = state.piece_at(candidate.from_square)
+                    if moving_piece is None or moving_piece.color != color or moving_piece.piece_type != piece_enum:
+                        continue
+                    next_state = state.copy(stack=False)
+                    next_state.push(candidate)
+                    next_state.turn = color
+                    state_key = (next_state.fen(), candidate.to_square)
+                    if state_key in seen_states:
+                        continue
+                    seen_states.add(state_key)
+                    reached.add(candidate.to_square)
+                    next_frontier.append((next_state, candidate.to_square))
+            hop_squares[hop] = reached
+            frontier = next_frontier
+
+        selected = set(hop_squares.get(self.hops, set()))
+        if self.exclude_lower_hops:
+            selected.difference_update(origins)
+            for hop in range(1, self.hops):
+                selected.difference_update(hop_squares.get(hop, set()))
+
+        encoded_hops = {
+            str(hop): sorted(_flip_square_for_bt4(board, square) for square in squares)
+            for hop, squares in hop_squares.items()
+        }
+        attended_positions = encoded_hops.get(str(self.attended_hop), []) if self.attended_hop else []
+        return RuleEvaluation(
+            mask=_mask_from_positions(sorted(_flip_square_for_bt4(board, square) for square in selected)),
+            metadata={
+                "piece_type": self.piece_type,
+                "hops": self.hops,
+                "exclude_lower_hops": self.exclude_lower_hops,
+                "ignore_blockers_after_first": self.ignore_blockers_after_first,
+                "hop_positions": encoded_hops,
+                "attended_hop": self.attended_hop,
+                "attended_positions": attended_positions,
+            },
+        )
 
 
 @dataclass(frozen=True)

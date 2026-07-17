@@ -6,6 +6,7 @@ from feature_varification import (
     MoveEndPieceRule,
     MoveStartPieceRule,
     PieceAttackRule,
+    PieceMultiHopDestinationRule,
     RelativeBoardRegionRule,
     RuleSpec,
     ValueOutcomeRule,
@@ -82,3 +83,21 @@ def test_rule_selection_prefers_specific_piece_occupancy() -> None:
     assert selected is not None
     assert selected.rule == RuleSpec("piece_type", {"piece_type": "own r"})
     assert selected.f1 == 1.0
+
+
+def test_multi_hop_bishop_rule_exposes_first_hop_attention_layer() -> None:
+    fen = "r3r1k1/ppp2ppb/8/2b2PP1/3pBq2/5N1Q/PPP3K1/R3R3 b - - 0 25"
+    rule = PieceMultiHopDestinationRule(
+        "own b",
+        hops=2,
+        exclude_lower_hops=True,
+        attended_hop=1,
+        ignore_blockers_after_first=True,
+    )
+    result = rule.evaluate(fen)
+    active = {index for index, value in enumerate(result.mask) if value}
+    attended = set(result.metadata["attended_positions"])
+
+    assert {get_pos_from_square(fen, square) for square in ("e1", "c3", "g3")} <= active
+    assert {get_pos_from_square(fen, square) for square in ("b4", "d6")} <= attended
+    assert get_pos_from_square(fen, "b4") not in active
