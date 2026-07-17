@@ -42,12 +42,11 @@ python scripts/shared_file_rpc/backend_file_worker.py \
 Run this from your local checkout:
 
 ```bash
-cd /Users/jackielin/Desktop/Interp/chess/Language-Model-SAEs
 python scripts/shared_file_rpc/local_ssh_bridge.py \
   --ssh-host root@qz-ssh-wstunnel \
   --queue-dir /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs-N/.shared_file_rpc \
   --host 127.0.0.1 \
-  --port 3000
+  --port 3025
 ```
 
 Then verify locally:
@@ -67,7 +66,7 @@ VITE_BACKEND_URL=http://127.0.0.1:3000
 Then run local frontend:
 
 ```bash
-cd /Users/jackielin/Desktop/Interp/chess/Language-Model-SAEs/ui
+cd ui
 bun dev
 ```
 
