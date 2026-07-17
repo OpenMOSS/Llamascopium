@@ -232,10 +232,11 @@ restore_meta.py
 /outputs/circuit_taxonomy/
 /outputs/circuit_taxonomy_evidence/
 /outputs/circuit_taxonomy_reviews/
-/scripts/circuit_taxonomy/
+/scripts/circuit_taxonomy/*
 /scripts/Attribution_Graph/
 !/scripts/circuit_taxonomy/README.md
 !/scripts/circuit_taxonomy/taxonomy_runner.py
+!/scripts/circuit_taxonomy/sync_reviewed_taxonomy_to_interpretations.py
 
 # Shared-file RPC runtime queue
 .shared_file_rpc/
