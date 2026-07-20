@@ -458,6 +458,7 @@ def collect_cache(
     inputs: torch.Tensor | str,
     replacement_modules: list[SparseAutoEncoder | LowRankSparseAttention | MixtureOfLinearTransform],
     with_bias_leaves: bool = False,
+    matryoshka_feature_range: tuple[int, int] | None = None,
 ):
     """Run model forward pass and collect useful cache for circuit tracing.
 
@@ -504,7 +505,10 @@ def collect_cache(
 
     with (
         model_bias_ctx as model_bias_names,
-        model.apply_saes(cast(list[SparseDictionary], replacement_modules)),
+        model.apply_saes(
+            cast(list[SparseDictionary], replacement_modules),
+            matryoshka_feature_range=matryoshka_feature_range,
+        ),
         sae_bias_ctx as sae_bias_names,
         model.detach_at(detach_hook_points),
     ):
@@ -547,6 +551,7 @@ def attribute(
     enable_qk_tracing: bool = False,
     qk_top_fraction: float = 0.6,
     qk_topk: int = 10,
+    matryoshka_feature_range: tuple[int, int] | None = None,
 ):
     """Run end-to-end circuit attribution for a single prompt.
 
@@ -573,6 +578,9 @@ def attribute(
         qk_top_fraction: Fraction of top Lorsa features to include
             as QK tracing targets.
         qk_topk: Number of QK tracing results to keep. This applies to both Q/K marginal attributions and pairwise attributions.
+        matryoshka_feature_range: Optional ``(start, end)`` latent range for
+            every Matryoshka SAE in ``replacement_modules``. ``None`` exposes
+            its full feature space.
     """
     assert not enable_qk_tracing or batch_size >= qk_topk, (
         f"attribute(batch_size={batch_size}) must be >= qk_topk={qk_topk} when enable_qk_tracing=True"
@@ -586,6 +594,7 @@ def attribute(
         einops.repeat(tokens, "n -> b n", b=batch_size),
         replacement_modules,
         with_bias_leaves=enable_qk_tracing,
+        matryoshka_feature_range=matryoshka_feature_range,
     )
 
     seq_len = cache["hook_embed.post"].shape[1]
@@ -871,6 +880,7 @@ def qk_trace(
     lorsa_features: NodeDimension,
     topk: int = 10,
     batch_size: int = 1,
+    matryoshka_feature_range: tuple[int, int] | None = None,
 ) -> QKTracingResult:
     tokens = ensure_tokenized(inputs, model.tokenizer, device=model.device)
     replacement_modules_cast: list[SparseAutoEncoder | LowRankSparseAttention | MixtureOfLinearTransform] = cast(
@@ -881,6 +891,7 @@ def qk_trace(
         einops.repeat(tokens, "n -> b n", b=batch_size * topk),
         replacement_modules_cast,
         with_bias_leaves=True,
+        matryoshka_feature_range=matryoshka_feature_range,
     )
 
     seq_len = cache["hook_embed.post"].shape[1]

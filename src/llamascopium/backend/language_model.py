@@ -515,10 +515,14 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         return pytree.tree_map(self._to_dtensor, run_with_ref_cache(self, *args, **kwargs))
 
     @contextmanager
-    def apply_saes(self, saes: list[SparseDictionary]):
+    def apply_saes(
+        self,
+        saes: list[SparseDictionary],
+        matryoshka_feature_range: tuple[int, int] | None = None,
+    ):
         from llamascopium.circuits.hooks import apply_saes as _apply_saes
 
-        with _apply_saes(self, saes):
+        with _apply_saes(self, saes, matryoshka_feature_range=matryoshka_feature_range):
             yield self
 
     @contextmanager
@@ -541,6 +545,7 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         enable_qk_tracing: bool = False,
         qk_top_fraction: float = 0.6,
         qk_topk: int = 10,
+        matryoshka_feature_range: tuple[int, int] | None = None,
     ):
         from llamascopium.circuits.attribution import attribute
 
@@ -557,6 +562,7 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
             enable_qk_tracing=enable_qk_tracing,
             qk_top_fraction=qk_top_fraction,
             qk_topk=qk_topk,
+            matryoshka_feature_range=matryoshka_feature_range,
         )
 
     def qk_trace(
@@ -566,6 +572,7 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
         lorsa_features: NodeDimension,
         topk: int = 10,
         batch_size: int = 1,
+        matryoshka_feature_range: tuple[int, int] | None = None,
     ):
         from llamascopium.circuits.attribution import qk_trace
 
@@ -576,6 +583,7 @@ class TransformerLensLanguageModel(HookedTransformer, LanguageModel):
             lorsa_features,
             topk,
             batch_size,
+            matryoshka_feature_range=matryoshka_feature_range,
         )
 
 

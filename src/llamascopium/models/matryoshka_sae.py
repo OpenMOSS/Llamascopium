@@ -98,6 +98,32 @@ class MatryoshkaSparseAutoEncoder(SparseAutoEncoder):
         assert self.cfg.matryoshka_loss_weights is not None
         return list(self.cfg.matryoshka_loss_weights)
 
+    def _postprocess_feature_acts(
+        self,
+        feature_acts: torch.Tensor,
+        *,
+        matryoshka_feature_range: tuple[int, int] | None = None,
+        **kwargs: Any,
+    ) -> torch.Tensor:
+        """Expose only one configured prefix or segment during inference."""
+        if matryoshka_feature_range is None or matryoshka_feature_range == (0, self.cfg.d_sae):
+            return feature_acts
+        start, end = matryoshka_feature_range
+        boundaries = {0, *self.cfg.matryoshka_widths}
+        if start not in boundaries or end not in boundaries or start >= end:
+            raise ValueError(
+                "matryoshka_feature_range boundaries must come from "
+                f"{sorted(boundaries)} with start < end, got {matryoshka_feature_range}."
+            )
+        return torch.cat(
+            [
+                torch.zeros_like(feature_acts[..., :start]),
+                feature_acts[..., start:end],
+                torch.zeros_like(feature_acts[..., end:]),
+            ],
+            dim=-1,
+        )
+
     @property
     def inner_matryoshka_widths(self) -> list[int]:
         return self.cfg.matryoshka_widths[:-1]

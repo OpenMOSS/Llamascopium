@@ -11,6 +11,7 @@ from transformer_lens.hook_points import HookPoint
 from llamascopium.backend.language_model import TransformerLensLanguageModel
 from llamascopium.backend.tl_addons import mount_hooked_modules
 from llamascopium.models.lorsa import LowRankSparseAttention
+from llamascopium.models.matryoshka_sae import MatryoshkaSparseAutoEncoder
 from llamascopium.models.molt import MixtureOfLinearTransform
 from llamascopium.models.sae import SparseAutoEncoder
 from llamascopium.models.sparse_dictionary import SparseDictionary
@@ -18,7 +19,11 @@ from llamascopium.utils.timer import timer
 
 
 @contextmanager
-def apply_saes(model: TransformerLensLanguageModel, saes: list[SparseDictionary]):
+def apply_saes(
+    model: TransformerLensLanguageModel,
+    saes: list[SparseDictionary],
+    matryoshka_feature_range: tuple[int, int] | None = None,
+):
     """
     Apply the sparse dictionaries to the model.
     """
@@ -46,7 +51,12 @@ def apply_saes(model: TransformerLensLanguageModel, saes: list[SparseDictionary]
             if (
                 x is None
             ):  # Only encode once to prevent re-encoding when a hook is called multiple times, like `blocks.0.ln1.hook_normalized` is called respectively for Q, K and V.
-                x = sae.encode(tensor, hook_attn_scores=True)
+                encoder_kwargs = (
+                    {"matryoshka_feature_range": matryoshka_feature_range}
+                    if isinstance(sae, MatryoshkaSparseAutoEncoder)
+                    else {}
+                )
+                x = sae.encode(tensor, hook_attn_scores=True, **encoder_kwargs)
             return tensor
 
         @timer.time(f"hook_out_{sae.cfg.sae_type}")

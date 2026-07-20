@@ -143,12 +143,19 @@ class CircuitStatus(str):
     FAILED = "failed"
 
 
+class CircuitFeatureTarget(BaseModel):
+    sae_name: str
+    feature_index: int
+    position: int
+
+
 class CircuitConfig(BaseModel):
     desired_logit_prob: float = 0.98
     max_feature_nodes: int = 256
     qk_tracing_topk: int = 10
     max_n_logits: int = 1
-    list_of_features: Optional[list[tuple[int, int, int, bool]]] = None
+    list_of_features: Optional[list[Union[tuple[int, int, int, bool], CircuitFeatureTarget]]] = None
+    matryoshka_feature_range: Optional[tuple[int, int]] = None
 
 
 class CircuitTextInput(BaseModel):

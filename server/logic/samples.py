@@ -178,14 +178,16 @@ def extract_samples(
 def list_feature_data(
     sae_name: str,
     indices: list[int],
+    series: str | None = None,
     with_samplings: bool = True,
     sampling_size: int = 1,
     sampling_visible_range: int = 10,
     with_logits: bool = True,
 ) -> dict[tuple[str, int], dict[str, Any]]:
     """List features and (optionally) their associated samples."""
+    series = series or sae_series
     features = client.list_features(
-        sae_name=sae_name, sae_series=sae_series, indices=indices, with_samplings=with_samplings
+        sae_name=sae_name, sae_series=series, indices=indices, with_samplings=with_samplings
     )
 
     features_by_key: dict[tuple[str, int], dict[str, Any]] = {}
@@ -221,7 +223,7 @@ def list_feature_data(
             samples = (
                 cached_extract_samples(
                     sae_name,
-                    sae_series,
+                    series,
                     feature.index,
                     sampling.name,
                     0,

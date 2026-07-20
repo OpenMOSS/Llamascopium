@@ -38,6 +38,7 @@ from .circuits import (
 from .config import DatasetConfig
 from .database import (
     CircuitConfig,
+    CircuitFeatureTarget,
     CircuitInput,
     CircuitStatus,
     FeatureAnalysisSampling,
@@ -158,6 +159,7 @@ __all__ = [
     "MongoDBConfig",
     "MongoClient",
     "CircuitConfig",
+    "CircuitFeatureTarget",
     "CircuitInput",
     "CircuitStatus",
     "FeatureAnalysisSampling",

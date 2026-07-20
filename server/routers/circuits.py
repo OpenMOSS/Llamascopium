@@ -1,5 +1,4 @@
 import functools
-import itertools
 import re
 import threading
 import traceback
@@ -13,9 +12,12 @@ from torch.distributed.device_mesh import DeviceMesh
 
 from llamascopium import (
     CircuitConfig,
+    CircuitFeatureTarget,
     CircuitInput,
     CircuitStatus,
     LorsaConfig,
+    MatryoshkaSAEConfig,
+    MatryoshkaSparseAutoEncoder,
     MOLTConfig,
     NodeDimension,
     NodeIndexed,
@@ -118,7 +120,8 @@ def create_sae_set(request: CreateSaeSetRequest):
 class GenerateCircuitRequest(BaseModel):
     """Request to generate a new circuit graph.
 
-    list_of_features: list of (layer, feature_idx, pos, is_lorsa) tuples
+    New feature targets use explicit SAE names. Legacy
+    (layer, feature_idx, pos, is_lorsa) tuples remain supported.
     """
 
     input: CircuitInput
@@ -128,36 +131,101 @@ class GenerateCircuitRequest(BaseModel):
     max_feature_nodes: int = 256
     qk_tracing_topk: int = 10
     max_n_logits: int = 1
-    list_of_features: Optional[list[tuple[int, int, int, bool]]] = None
+    list_of_features: Optional[list[tuple[int, int, int, bool] | CircuitFeatureTarget]] = None
+    matryoshka_feature_range: Optional[tuple[int, int]] = None
     parent_id: Optional[str] = None
 
 
+def get_matryoshka_range_options(sae_set_name: str) -> dict[str, Any]:
+    sae_set = client.get_sae_set(name=sae_set_name)
+    if sae_set is None:
+        raise ValueError(f"SAE set {sae_set_name} not found")
+
+    configs = [
+        (sae_name, cfg)
+        for sae_name in sae_set.sae_names
+        if isinstance((cfg := get_sae_cfg(name=sae_name)), MatryoshkaSAEConfig)
+    ]
+    if not configs:
+        return {"sae_names": [], "prefixes": [], "segments": []}
+
+    prefix_sets: list[set[tuple[int, int]]] = []
+    segment_sets: list[set[tuple[int, int]]] = []
+    for _, cfg in configs:
+        boundaries = [0, *cfg.matryoshka_widths]
+        prefix_sets.append({(0, end) for end in cfg.matryoshka_widths})
+        segment_sets.append(set(zip(boundaries[:-1], boundaries[1:])))
+
+    common_prefixes = set.intersection(*prefix_sets)
+    common_segments = set.intersection(*segment_sets)
+    return {
+        "sae_names": [name for name, _ in configs],
+        "prefixes": sorted(common_prefixes),
+        "segments": sorted(common_segments),
+    }
+
+
+@router.get("/sae-sets/{sae_set_name}/matryoshka-ranges")
+def list_matryoshka_ranges(sae_set_name: str):
+    """List selectable Matryoshka prefixes and adjacent feature segments."""
+    try:
+        return get_matryoshka_range_options(sae_set_name)
+    except ValueError as exc:
+        return Response(content=str(exc), status_code=404)
+
+
 @timer.time("concretize_graph_data")
-def concretize_graph_data(graph_data: dict[str, Any]):
+def concretize_graph_data(graph_data: dict[str, Any], circuit_sae_series: str):
     """Concretize a graph data by adding feature data. This will modify the graph data in place."""
     logger.info("Retrieving feature records for circuit")
 
-    features = functools.reduce(
-        lambda acc, x: acc | x,
-        [
-            list_feature_data(sae_name=sae_name, indices=[node["feature"] for node in nodes], with_samplings=False)
-            for sae_name, nodes in itertools.groupby(
-                sorted(
-                    filter(lambda x: x.get("sae_name") is not None, graph_data["nodes"]), key=lambda x: x["sae_name"]
-                ),
-                key=lambda x: x["sae_name"],
-            )
-        ],
-        {},
-    )
-
+    indices_by_sae: dict[str, set[int]] = {}
     for node in graph_data["nodes"]:
-        if node.get("sae_name") is not None:
-            if (node["sae_name"], node["feature"]) not in features:
-                return Response(
-                    content=f"Feature {node['feature']} not found in SAE {node['sae_name']}", status_code=404
-                )
-            node["feature"] = features[(node["sae_name"], node["feature"])]
+        sae_name = node.get("sae_name")
+        if sae_name is not None:
+            indices_by_sae.setdefault(sae_name, set()).add(int(node["feature"]))
+
+    features: dict[tuple[str, int], dict[str, Any]] = {}
+    for sae_name, indices in indices_by_sae.items():
+        features.update(
+            list_feature_data(
+                sae_name=sae_name,
+                indices=sorted(indices),
+                series=circuit_sae_series,
+                with_samplings=False,
+            )
+        )
+
+    missing: set[tuple[str, int]] = set()
+    for node in graph_data["nodes"]:
+        sae_name = node.get("sae_name")
+        if sae_name is None:
+            continue
+        feature_index = int(node["feature"])
+        key = (sae_name, feature_index)
+        feature = features.get(key)
+        if feature is None:
+            missing.add(key)
+            feature = {
+                "feature_index": feature_index,
+                "analysis_name": "unavailable",
+                "interpretation": None,
+                "dictionary_name": sae_name,
+                "act_times": 0,
+                "max_feature_act": 0.0,
+                "n_analyzed_tokens": None,
+                "logits": None,
+            }
+        node["feature"] = feature
+
+    if missing:
+        missing_examples = sorted(missing)[:20]
+        logger.warning(
+            "Circuit feature lookup unresolved: circuit_series=%s count=%d examples=%s",
+            circuit_sae_series,
+            len(missing),
+            missing_examples,
+        )
 
 
 @synchronized
@@ -197,11 +265,15 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
     for sae_name in sae_set.sae_names:
         cfg = get_sae_cfg(name=sae_name)
         assert isinstance(cfg, SAEConfig | LorsaConfig | MOLTConfig)
+        is_matryoshka = isinstance(cfg, MatryoshkaSAEConfig)
+        if is_matryoshka and circuit.config.matryoshka_feature_range is None:
+            continue
         layer_match = re.search(r"blocks\.(\d+)\.", cfg.hook_point_out)
         layer_idx = int(layer_match.group(1)) if layer_match else 0
         sae_metadata[cfg.hook_point_out] = {
             "sae_name": sae_name,
             "is_lorsa": isinstance(cfg, LorsaConfig),
+            "is_matryoshka": is_matryoshka,
             "layer_idx": layer_idx,
         }
 
@@ -240,7 +312,13 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
     target_vocab_index = (
         int(targets.node_mappings["logits"].indices[0][0].item()) if "logits" in targets.node_mappings else -1
     )
-    n_layers = max((int(item["layer_idx"]) for item in sae_metadata.values()), default=-1) + 1
+    max_feature_layer = max(
+        (
+            2 * int(item["layer_idx"]) + (2 if item["is_matryoshka"] else int(not item["is_lorsa"]))
+            for item in sae_metadata.values()
+        ),
+        default=-1,
+    )
 
     @timer.time("make_node")
     def make_node(
@@ -265,7 +343,7 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
         if node_key == "logits":
             vocab_idx = indices[0]
             ctx_idx = max(len(ar.prompt_token_ids) - 1, 0)
-            layer = 2 * n_layers
+            layer = max_feature_layer + 1
             return {
                 "feature_type": "logit",
                 "node_id": f"{layer}_{vocab_idx}_{ctx_idx}",
@@ -281,12 +359,19 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
             hook_point_out = node_key.removesuffix(".error")
             metadata = sae_metadata.get(hook_point_out, None)
             is_lorsa = bool(metadata["is_lorsa"]) if metadata is not None else False
+            is_matryoshka = bool(metadata["is_matryoshka"]) if metadata is not None else False
             layer_base = int(metadata["layer_idx"]) if metadata is not None else parse_hook_layer(hook_point_out)
-            layer = 2 * layer_base + int(not is_lorsa)
+            layer = 2 * layer_base + (2 if is_matryoshka else int(not is_lorsa))
             pos = indices[0]
             return {
-                "feature_type": "lorsa error" if is_lorsa else "mlp reconstruction error",
-                "node_id": f"{layer}_error_{pos}",
+                "feature_type": (
+                    "residual reconstruction error"
+                    if is_matryoshka
+                    else "lorsa error"
+                    if is_lorsa
+                    else "mlp reconstruction error"
+                ),
+                "node_id": f"R_{layer_base}_error_{pos}" if is_matryoshka else f"{layer}_error_{pos}",
                 "layer": layer,
                 "ctx_idx": pos,
                 "is_target_logit": False,
@@ -297,17 +382,21 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
             hook_point_out = node_key.removesuffix(".sae.hook_feature_acts")
             metadata = sae_metadata.get(hook_point_out, None)
             is_lorsa = bool(metadata["is_lorsa"]) if metadata is not None else False
+            is_matryoshka = bool(metadata["is_matryoshka"]) if metadata is not None else False
             layer_base = int(metadata["layer_idx"]) if metadata is not None else parse_hook_layer(hook_point_out)
-            layer = 2 * layer_base + int(not is_lorsa)
+            layer = 2 * layer_base + (2 if is_matryoshka else int(not is_lorsa))
             pos = indices[0] if len(indices) > 0 else 0
             feature_idx = indices[1] if len(indices) > 1 else 0
             return {
-                "feature_type": "lorsa" if is_lorsa else "cross layer transcoder",
-                "node_id": f"{layer}_{feature_idx}_{pos}",
+                "feature_type": (
+                    "matryoshka sae" if is_matryoshka else "lorsa" if is_lorsa else "cross layer transcoder"
+                ),
+                "node_id": (f"R_{layer_base}_{feature_idx}_{pos}" if is_matryoshka else f"{layer}_{feature_idx}_{pos}"),
                 "layer": layer,
                 "ctx_idx": pos,
                 "feature": feature_idx,
                 "sae_name": metadata["sae_name"] if metadata is not None else None,
+                "matryoshka_feature_range": (circuit.config.matryoshka_feature_range if is_matryoshka else None),
                 "activation": activation,
                 "qk_tracing_results": None,
                 "is_target_logit": False,
@@ -386,7 +475,7 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
         "links": links,
     }
 
-    concretize_graph_data(graph_data)
+    concretize_graph_data(graph_data, circuit.sae_series)
 
     return graph_data
 
@@ -412,6 +501,12 @@ def run_circuit_attribution(
             assert sae_set is not None, f"SAE set {sae_set_name} not found"
             sae_names = sae_set.sae_names
             saes = {sae_name: get_sae(name=sae_name, device_mesh=device_mesh) for sae_name in sae_names}
+            replacement_saes = {
+                sae_name: sae
+                for sae_name, sae in saes.items()
+                if request.matryoshka_feature_range is not None or not isinstance(sae, MatryoshkaSparseAutoEncoder)
+            }
+            assert replacement_saes, "The selected SAE set has no enabled sparse dictionaries"
 
             model_name = client.get_sae_model_name(sae_names[0], sae_set.sae_series)
             model = get_model(name=model_name, device_mesh=device_mesh)
@@ -435,7 +530,9 @@ def run_circuit_attribution(
             feature_targets: list[tuple[str, int, int]] = []
             if request.list_of_features:
                 layer_key_map: dict[tuple[int, bool], str] = {}
-                for sae in saes.values():
+                for sae in replacement_saes.values():
+                    if isinstance(sae, MatryoshkaSparseAutoEncoder):
+                        continue
                     cfg = sae.cfg
                     assert isinstance(cfg, SAEConfig | LorsaConfig | MOLTConfig)
                     m = re.search(r"blocks\.(\d+)\.", cfg.hook_point_out)
@@ -443,27 +540,46 @@ def run_circuit_attribution(
                         layer_key_map[(int(m.group(1)), isinstance(cfg, LorsaConfig))] = (
                             cfg.hook_point_out + ".sae.hook_feature_acts"
                         )
+                legacy_targets = [target for target in request.list_of_features if isinstance(target, tuple)]
                 missing = [
                     (layer, is_lorsa)
-                    for layer, _, _, is_lorsa in request.list_of_features
+                    for layer, _, _, is_lorsa in legacy_targets
                     if (layer, is_lorsa) not in layer_key_map
                 ]
                 assert not missing, f"No SAE in set {sae_set_name} covers (layer, is_lorsa)={missing}"
-                feature_targets = [
-                    (layer_key_map[(layer, is_lorsa)], pos, feat_idx)
-                    for layer, feat_idx, pos, is_lorsa in request.list_of_features
-                ]
+                for target in request.list_of_features:
+                    if isinstance(target, CircuitFeatureTarget):
+                        sae = replacement_saes.get(target.sae_name)
+                        assert sae is not None, f"SAE {target.sae_name} is not enabled in set {sae_set_name}"
+                        if isinstance(sae, MatryoshkaSparseAutoEncoder):
+                            assert request.matryoshka_feature_range is not None
+                            start, end = request.matryoshka_feature_range
+                            assert start <= target.feature_index < end, (
+                                f"Matryoshka feature {target.feature_index} is outside enabled range [{start}, {end})"
+                            )
+                        feature_targets.append(
+                            (
+                                sae.cfg.hook_point_out + ".sae.hook_feature_acts",
+                                target.position,
+                                target.feature_index,
+                            )
+                        )
+                    else:
+                        layer, feat_idx, pos, is_lorsa = target
+                        feature_targets.append((layer_key_map[(layer, is_lorsa)], pos, feat_idx))
 
             attribution = model.attribute(
                 inputs=prompt,
-                replacement_modules=list(saes.values()),
+                replacement_modules=list(replacement_saes.values()),
                 target_type="features" if feature_targets else "logits",
                 features=feature_targets,
                 max_n_logits=request.max_n_logits,
                 desired_logit_prob=request.desired_logit_prob,
-                batch_size=10,
+                batch_size=max(10, request.qk_tracing_topk),
                 max_features=request.max_feature_nodes,
                 enable_qk_tracing=request.qk_tracing_topk > 0,
+                qk_topk=request.qk_tracing_topk,
+                matryoshka_feature_range=request.matryoshka_feature_range,
             ).full_tensor()
 
             if is_primary_rank(device_mesh):
@@ -491,6 +607,17 @@ def create_circuit(sae_set_name: str, request: GenerateCircuitRequest, backgroun
     sae_set = client.get_sae_set(name=sae_set_name)
     if sae_set is None:
         return Response(content=f"SAE set {sae_set_name} not found", status_code=404)
+
+    range_options = get_matryoshka_range_options(sae_set_name)
+    allowed_ranges = {tuple(item) for item in range_options["prefixes"] + range_options["segments"]}
+    if request.matryoshka_feature_range is not None and request.matryoshka_feature_range not in allowed_ranges:
+        return Response(
+            content=(
+                f"Invalid Matryoshka feature range {request.matryoshka_feature_range}; "
+                f"allowed ranges are {sorted(allowed_ranges)}"
+            ),
+            status_code=400,
+        )
 
     sae_names = sae_set.sae_names
 
@@ -523,6 +650,7 @@ def create_circuit(sae_set_name: str, request: GenerateCircuitRequest, backgroun
         qk_tracing_topk=request.qk_tracing_topk,
         max_n_logits=request.max_n_logits,
         list_of_features=request.list_of_features,
+        matryoshka_feature_range=request.matryoshka_feature_range,
     )
 
     # Create circuit record with pending status

@@ -133,6 +133,10 @@ class SparseAutoEncoder(
         self.hook_reconstructed = HookPoint()
         self.setup()
 
+    def _postprocess_feature_acts(self, feature_acts: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """Apply model-specific feature filtering before exposing activations to hooks."""
+        return feature_acts
+
     @override
     def encoder_norm(self, keepdim: bool = False):
         """Compute the norm of the encoder weight."""
@@ -339,6 +343,8 @@ class SparseAutoEncoder(
         if self.cfg.sparsity_include_decoder_norm:
             feature_acts = feature_acts / self.decoder_norm()
             hidden_pre = hidden_pre / self.decoder_norm()
+
+        feature_acts = self._postprocess_feature_acts(feature_acts, **kwargs)
 
         if return_hidden_pre:
             return self.hook_feature_acts(feature_acts), hidden_pre
