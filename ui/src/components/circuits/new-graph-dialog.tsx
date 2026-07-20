@@ -1,13 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, MessageSquare, Plus, Type, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { CreateSaeSetDialog } from './create-sae-set-dialog'
 import type {
   ChatMessage,
   CircuitInput,
   GenerateCircuitParams,
+  MatryoshkaFeatureRange,
 } from '@/api/circuits'
-import { generateCircuit, previewInput } from '@/api/circuits'
+import {
+  fetchMatryoshkaRanges,
+  generateCircuit,
+  previewInput,
+} from '@/api/circuits'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
@@ -42,6 +47,7 @@ interface NewGraphDialogProps {
     maxFeatureNodes?: number
     maxNLogits?: number
     qkTracingTopk?: number
+    matryoshkaFeatureRange?: MatryoshkaFeatureRange | null
     name?: string
   }
   trigger?: React.ReactNode
@@ -87,6 +93,29 @@ export function NewGraphDialog({
   const [qkTracingTopk, setQkTracingTopk] = useState(
     initialConfig?.qkTracingTopk ?? 10,
   )
+  const [matryoshkaFeatureRange, setMatryoshkaFeatureRange] =
+    useState<MatryoshkaFeatureRange | null>(
+      initialConfig?.matryoshkaFeatureRange ?? null,
+    )
+
+  const { data: matryoshkaOptions } = useQuery({
+    queryKey: ['matryoshka-ranges', selectedSaeSet],
+    queryFn: () =>
+      fetchMatryoshkaRanges({ data: { saeSetName: selectedSaeSet } }),
+    enabled: !!selectedSaeSet,
+  })
+
+  useEffect(() => {
+    if (!matryoshkaOptions || matryoshkaFeatureRange === null) return
+    const value = matryoshkaFeatureRange.join(':')
+    const validRanges = [
+      ...matryoshkaOptions.prefixes,
+      ...matryoshkaOptions.segments,
+    ]
+    if (!validRanges.some((range) => range.join(':') === value)) {
+      setMatryoshkaFeatureRange(null)
+    }
+  }, [matryoshkaFeatureRange, matryoshkaOptions])
 
   const {
     mutate: mutateGenerateCircuit,
@@ -190,6 +219,7 @@ export function NewGraphDialog({
       maxFeatureNodes: maxNodes,
       maxNLogits: maxLogits,
       qkTracingTopk,
+      matryoshkaFeatureRange,
     }
 
     mutateGenerateCircuit({ data: params })
@@ -218,6 +248,7 @@ export function NewGraphDialog({
     setMaxNodes(initialConfig?.maxFeatureNodes ?? 256)
     setMaxLogits(initialConfig?.maxNLogits ?? 1)
     setQkTracingTopk(initialConfig?.qkTracingTopk ?? 10)
+    setMatryoshkaFeatureRange(initialConfig?.matryoshkaFeatureRange ?? null)
   }
 
   const handleDialogClose = () => {
@@ -346,6 +377,49 @@ export function NewGraphDialog({
                     showValue={false}
                   />
                 </div>
+                {matryoshkaOptions && matryoshkaOptions.saeNames.length > 0 && (
+                  <div>
+                    <label className="text-xs font-medium text-slate-700 mb-1.5 block">
+                      Matryoshka Residual Features
+                    </label>
+                    <Select
+                      value={matryoshkaFeatureRange?.join(':') ?? 'disabled'}
+                      onValueChange={(value) => {
+                        if (value === 'disabled') {
+                          setMatryoshkaFeatureRange(null)
+                          return
+                        }
+                        const [start, end] = value.split(':').map(Number)
+                        setMatryoshkaFeatureRange([start, end])
+                      }}
+                    >
+                      <SelectTrigger className="h-10 bg-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="disabled">Disabled</SelectItem>
+                        {matryoshkaOptions.prefixes.map(([start, end]) => (
+                          <SelectItem
+                            key={`prefix-${start}-${end}`}
+                            value={`${start}:${end}`}
+                          >
+                            Prefix [{start}, {end})
+                          </SelectItem>
+                        ))}
+                        {matryoshkaOptions.segments
+                          .filter(([start]) => start > 0)
+                          .map(([start, end]) => (
+                            <SelectItem
+                              key={`segment-${start}-${end}`}
+                              value={`${start}:${end}`}
+                            >
+                              Segment [{start}, {end})
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
             </div>
           </div>

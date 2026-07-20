@@ -33,7 +33,8 @@ export const SelectedFeaturesList = memo(
           (n): n is FeatureNode =>
             !!n &&
             (n.featureType === 'lorsa' ||
-              n.featureType === 'cross layer transcoder'),
+              n.featureType === 'cross layer transcoder' ||
+              n.featureType === 'matryoshka sae'),
         )
     }, [selectedIds, circuit.nodes])
 

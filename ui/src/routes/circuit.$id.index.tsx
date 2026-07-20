@@ -171,14 +171,13 @@ function CircuitPage() {
     if (!circuitData || selectedIds.length === 0) return
 
     const circuit = circuitData.graphData
-    const listOfFeatures: (number | boolean)[][] = selectedIds.map((id) => {
+    const listOfFeatures = selectedIds.map((id) => {
       const node = circuit.nodes.find((n) => n.nodeId === id) as FeatureNode
-      return [
-        Math.floor(node.layer / 2),
-        node.feature.featureIndex,
-        node.ctxIdx,
-        node.featureType === 'lorsa',
-      ]
+      return {
+        saeName: node.saeName,
+        featureIndex: node.feature.featureIndex,
+        position: node.ctxIdx,
+      }
     })
 
     doGenerateCircuit({
@@ -189,6 +188,8 @@ function CircuitPage() {
         maxFeatureNodes: circuitData.config.maxFeatureNodes,
         maxNLogits: circuitData.config.maxNLogits,
         qkTracingTopk: circuitData.config.qkTracingTopk,
+        matryoshkaFeatureRange:
+          circuitData.config.matryoshkaFeatureRange ?? null,
         listOfFeatures,
         parentId: circuitId,
       },
@@ -234,7 +235,8 @@ function CircuitPage() {
     if (
       !node ||
       (node.featureType !== 'cross layer transcoder' &&
-        node.featureType !== 'lorsa')
+        node.featureType !== 'lorsa' &&
+        node.featureType !== 'matryoshka sae')
     )
       return null
 
@@ -249,7 +251,8 @@ function CircuitPage() {
         if (
           !node ||
           (node.featureType !== 'cross layer transcoder' &&
-            node.featureType !== 'lorsa')
+            node.featureType !== 'lorsa' &&
+            node.featureType !== 'matryoshka sae')
         )
           return
 
@@ -330,6 +333,8 @@ function CircuitPage() {
                   maxFeatureNodes: circuitData.config.maxFeatureNodes,
                   maxNLogits: circuitData.config.maxNLogits,
                   qkTracingTopk: circuitData.config.qkTracingTopk,
+                  matryoshkaFeatureRange:
+                    circuitData.config.matryoshkaFeatureRange ?? null,
                   name: circuitData.name
                     ? `${circuitData.name}-remix`
                     : undefined,

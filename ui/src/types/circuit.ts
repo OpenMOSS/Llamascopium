@@ -10,7 +10,7 @@ export const QKTracingResultsSchema = z.object({
 export type QKTracingResults = z.infer<typeof QKTracingResultsSchema>
 
 export const FeatureNodeSchema = z.object({
-  featureType: z.enum(['lorsa', 'cross layer transcoder']),
+  featureType: z.enum(['lorsa', 'cross layer transcoder', 'matryoshka sae']),
   nodeId: z.string(),
   layer: z.number(),
   ctxIdx: z.number(),
@@ -20,6 +20,7 @@ export const FeatureNodeSchema = z.object({
   feature: FeatureSchema,
   qkTracingResults: QKTracingResultsSchema.nullish(),
   isFromQkTracing: z.boolean().default(false),
+  matryoshkaFeatureRange: z.tuple([z.number(), z.number()]).nullish(),
 })
 
 export type FeatureNode = z.infer<typeof FeatureNodeSchema>
@@ -36,7 +37,11 @@ export const TokenNodeSchema = z.object({
 export type TokenNode = z.infer<typeof TokenNodeSchema>
 
 export const ErrorNodeSchema = z.object({
-  featureType: z.enum(['lorsa error', 'mlp reconstruction error']),
+  featureType: z.enum([
+    'lorsa error',
+    'mlp reconstruction error',
+    'residual reconstruction error',
+  ]),
   nodeId: z.string(),
   layer: z.number(),
   ctxIdx: z.number(),

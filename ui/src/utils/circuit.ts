@@ -28,6 +28,8 @@ export function getNodeColor(featureType: string): string {
       return '#f59f00'
     case 'lorsa':
       return '#339af0'
+    case 'matryoshka sae':
+      return '#0f766e'
     default:
       return '#95a5a6'
   }
@@ -53,12 +55,20 @@ export function formatFeatureId(node: Node, verbose: boolean = true): string {
     return verbose
       ? `A${attnLayer}#${featureId}@${node.ctxIdx}`
       : `A${attnLayer}`
+  } else if (node.featureType === 'matryoshka sae') {
+    const residualLayer = Math.floor(node.layer / 2) - 1
+    const featureId = node.feature.featureIndex
+    return verbose
+      ? `R${residualLayer}#${featureId}@${node.ctxIdx}`
+      : `R${residualLayer}`
   } else if (node.featureType === 'embedding') {
     return `Emb@${node.ctxIdx}: ${node.token}`
   } else if (node.featureType === 'mlp reconstruction error') {
     return `M${Math.floor(layerIdx / 2) - 1}Error@${node.ctxIdx}`
   } else if (node.featureType === 'lorsa error') {
     return `A${Math.floor(layerIdx / 2)}Error@${node.ctxIdx}`
+  } else if (node.featureType === 'residual reconstruction error') {
+    return `R${Math.floor(node.layer / 2) - 1}Error@${node.ctxIdx}`
   } else if (node.featureType === 'logit') {
     return `Logit@${node.ctxIdx}: ${node.token} (${(node.tokenProb * 100).toFixed(1)}%)`
   } else if (node.featureType === 'bias') {

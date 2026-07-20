@@ -113,7 +113,8 @@ function EmbedQKTracingPage() {
           </span>
           <span className="text-xs font-medium truncate">
             {node.featureType === 'lorsa' ||
-            node.featureType === 'cross layer transcoder'
+            node.featureType === 'cross layer transcoder' ||
+            node.featureType === 'matryoshka sae'
               ? node.feature.interpretation?.text
               : 'token' in node
                 ? node.token

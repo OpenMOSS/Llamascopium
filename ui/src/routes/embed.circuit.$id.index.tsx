@@ -96,7 +96,8 @@ function EmbedCircuitPage() {
     if (
       !node ||
       (node.featureType !== 'cross layer transcoder' &&
-        node.featureType !== 'lorsa')
+        node.featureType !== 'lorsa' &&
+        node.featureType !== 'matryoshka sae')
     )
       return null
     return node.feature

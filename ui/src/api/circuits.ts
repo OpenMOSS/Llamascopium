@@ -8,12 +8,26 @@ import { CircuitDataSchema, QKNodeDataSchema } from '@/types/circuit'
 
 export type CircuitStatus = 'pending' | 'running' | 'completed' | 'failed'
 
+export type MatryoshkaFeatureRange = [number, number]
+
+export interface CircuitFeatureTarget {
+  saeName: string
+  featureIndex: number
+  position: number
+}
+
+export type LegacyCircuitFeatureTarget = [number, number, number, boolean]
+export type CircuitFeatureTargetInput =
+  | LegacyCircuitFeatureTarget
+  | CircuitFeatureTarget
+
 export interface CircuitConfig {
   desiredLogitProb: number
   maxFeatureNodes: number
   qkTracingTopk: number
   maxNLogits: number
-  listOfFeatures?: (number | boolean)[][]
+  listOfFeatures?: CircuitFeatureTargetInput[]
+  matryoshkaFeatureRange?: MatryoshkaFeatureRange | null
 }
 
 export interface ChatMessage {
@@ -67,7 +81,8 @@ export interface GenerateCircuitParams {
   maxFeatureNodes?: number
   qkTracingTopk?: number
   maxNLogits?: number
-  listOfFeatures?: (number | boolean)[][]
+  listOfFeatures?: CircuitFeatureTargetInput[]
+  matryoshkaFeatureRange?: MatryoshkaFeatureRange | null
   parentId?: string
 }
 
@@ -113,6 +128,26 @@ export const fetchSaeSets = createServerFn({ method: 'GET' }).handler(
     return parseWithPrettify(z.array(z.string()), data)
   },
 )
+
+export interface MatryoshkaRangeOptions {
+  saeNames: string[]
+  prefixes: MatryoshkaFeatureRange[]
+  segments: MatryoshkaFeatureRange[]
+}
+
+export const fetchMatryoshkaRanges = createServerFn({ method: 'GET' })
+  .inputValidator((data: { saeSetName: string }) => data)
+  .handler(async ({ data: { saeSetName } }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/sae-sets/${encodeURIComponent(saeSetName)}/matryoshka-ranges`,
+    )
+    if (!response.ok) {
+      throw new Error(await response.text())
+    }
+    return camelcaseKeys(await response.json(), {
+      deep: true,
+    }) as MatryoshkaRangeOptions
+  })
 
 export const createSaeSet = createServerFn({ method: 'POST' })
   .inputValidator((data: { name: string; saeNames: string[] }) => data)
@@ -262,6 +297,7 @@ export const generateCircuit = createServerFn({ method: 'POST' })
       qkTracingTopk,
       maxNLogits,
       listOfFeatures,
+      matryoshkaFeatureRange,
       parentId,
     } = data
 
@@ -292,7 +328,16 @@ export const generateCircuit = createServerFn({ method: 'POST' })
           max_feature_nodes: maxFeatureNodes,
           qk_tracing_topk: qkTracingTopk,
           max_n_logits: maxNLogits,
-          list_of_features: listOfFeatures,
+          list_of_features: listOfFeatures?.map((target) =>
+            Array.isArray(target)
+              ? target
+              : {
+                  sae_name: target.saeName,
+                  feature_index: target.featureIndex,
+                  position: target.position,
+                },
+          ),
+          matryoshka_feature_range: matryoshkaFeatureRange ?? null,
           parent_id: parentId,
         }),
       },

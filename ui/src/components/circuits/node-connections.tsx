@@ -54,7 +54,8 @@ const FeatureRow = memo(
             </span>
             <span className="text-xs font-medium">
               {(node.featureType === 'cross layer transcoder' ||
-                node.featureType === 'lorsa') &&
+                node.featureType === 'lorsa' ||
+                node.featureType === 'matryoshka sae') &&
                 node.feature.interpretation?.text}
             </span>
           </div>
@@ -107,7 +108,8 @@ const QKTracingSection = memo(
           </span>
           <span className="text-xs font-medium truncate">
             {node.featureType === 'lorsa' ||
-            node.featureType === 'cross layer transcoder'
+            node.featureType === 'cross layer transcoder' ||
+            node.featureType === 'matryoshka sae'
               ? node.feature.interpretation?.text
               : 'token' in node
                 ? node.token
@@ -311,7 +313,8 @@ export const NodeConnections = memo(
               </span> */}
               <span className="text-sm font-semibold truncate">
                 {clickedNode.featureType === 'cross layer transcoder' ||
-                clickedNode.featureType === 'lorsa'
+                clickedNode.featureType === 'lorsa' ||
+                clickedNode.featureType === 'matryoshka sae'
                   ? clickedNode.feature.interpretation?.text
                   : 'token' in clickedNode
                     ? clickedNode.token
@@ -324,7 +327,8 @@ export const NodeConnections = memo(
               )}
             </div>
             {(clickedNode.featureType === 'cross layer transcoder' ||
-              clickedNode.featureType === 'lorsa') && (
+              clickedNode.featureType === 'lorsa' ||
+              clickedNode.featureType === 'matryoshka sae') && (
               <Link
                 to="/dictionaries/$dictionaryName/features/$featureIndex"
                 params={{

@@ -1,10 +1,13 @@
 import json
 import types
 
+import pytest
 import safetensors.torch as safe
 import torch
 
 from llamascopium import (
+    CircuitConfig,
+    CircuitFeatureTarget,
     Initializer,
     InitializerConfig,
     MatryoshkaSAEConfig,
@@ -14,6 +17,71 @@ from llamascopium import (
     TrainSAESettings,
 )
 from llamascopium.models.sparse_dictionary import SparseDictionary
+
+
+def _build_range_test_sae() -> MatryoshkaSparseAutoEncoder:
+    cfg = MatryoshkaSAEConfig(
+        hook_point_in="in",
+        hook_point_out="out",
+        d_model=2,
+        expansion_factor=2,
+        device="cpu",
+        dtype=torch.float32,
+        norm_activation="inference",
+        use_decoder_bias=False,
+        act_fn="relu",
+        sparsity_include_decoder_norm=False,
+        matryoshka_widths=[2, 4],
+    )
+    sae = MatryoshkaSparseAutoEncoder(cfg)
+    with torch.no_grad():
+        sae.W_E.fill_(1.0)
+        sae.b_E.zero_()
+    return sae
+
+
+@pytest.mark.parametrize(
+    ("feature_range", "expected"),
+    [
+        ((0, 2), [2.0, 2.0, 0.0, 0.0]),
+        ((2, 4), [0.0, 0.0, 2.0, 2.0]),
+        ((0, 4), [2.0, 2.0, 2.0, 2.0]),
+    ],
+)
+def test_matryoshka_feature_range_masks_activations_before_hook(feature_range, expected):
+    sae = _build_range_test_sae()
+    hooked: list[torch.Tensor] = []
+    sae.hook_feature_acts.add_hook(lambda tensor, hook: hooked.append(tensor.detach().clone()) or tensor)
+
+    actual = sae.encode(torch.ones(1, 2), matryoshka_feature_range=feature_range)
+
+    expected_tensor = torch.tensor([expected])
+    assert torch.equal(actual, expected_tensor)
+    assert len(hooked) == 1
+    assert torch.equal(hooked[0], expected_tensor)
+
+
+def test_matryoshka_feature_range_rejects_unconfigured_boundary():
+    sae = _build_range_test_sae()
+
+    with pytest.raises(ValueError, match="boundaries must come from"):
+        sae.encode(torch.ones(1, 2), matryoshka_feature_range=(1, 4))
+
+
+def test_circuit_config_supports_named_targets_and_legacy_targets():
+    config = CircuitConfig.model_validate(
+        {
+            "list_of_features": [
+                {"sae_name": "matry-layer27", "feature_index": 7000, "position": 3},
+                [27, 12, 3, False],
+            ],
+            "matryoshka_feature_range": [6144, 12288],
+        }
+    )
+
+    assert isinstance(config.list_of_features[0], CircuitFeatureTarget)
+    assert config.list_of_features[1] == (27, 12, 3, False)
+    assert config.matryoshka_feature_range == (6144, 12288)
 
 
 def test_matryoshka_config_normalizes_widths_and_weights():

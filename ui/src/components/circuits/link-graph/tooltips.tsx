@@ -25,7 +25,8 @@ export const Tooltips: React.FC<TooltipsProps> = React.memo(
 
     const tooltipText =
       hoveredNode.featureType === 'cross layer transcoder' ||
-      hoveredNode.featureType === 'lorsa'
+      hoveredNode.featureType === 'lorsa' ||
+      hoveredNode.featureType === 'matryoshka sae'
         ? hoveredNode.feature.interpretation
           ? `${hoveredNode.feature.interpretation.text}`
           : `Feature ${hoveredNode.feature.featureIndex}@${hoveredNode.saeName}`
@@ -35,9 +36,11 @@ export const Tooltips: React.FC<TooltipsProps> = React.memo(
             ? `MLP Reconstruction Error@${hoveredNode.ctxIdx}`
             : hoveredNode.featureType === 'lorsa error'
               ? `Lorsa Error@${hoveredNode.ctxIdx}`
-              : hoveredNode.featureType === 'logit'
-                ? `Logit@${hoveredNode.ctxIdx}: ${hoveredNode.token} (${(hoveredNode.tokenProb * 100).toFixed(1)}%)`
-                : `Unknown Feature Type@${hoveredNode.ctxIdx}`
+              : hoveredNode.featureType === 'residual reconstruction error'
+                ? `Residual Reconstruction Error@${hoveredNode.ctxIdx}`
+                : hoveredNode.featureType === 'logit'
+                  ? `Logit@${hoveredNode.ctxIdx}: ${hoveredNode.token} (${(hoveredNode.tokenProb * 100).toFixed(1)}%)`
+                  : `Unknown Feature Type@${hoveredNode.ctxIdx}`
 
     const textWidth = tooltipText.length * 6
     const tooltipWidth = Math.max(120, textWidth + 20)

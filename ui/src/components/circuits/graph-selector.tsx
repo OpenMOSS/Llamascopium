@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from '@tanstack/react-router'
 import type {
+  CircuitFeatureTargetInput,
   CircuitInput,
   CircuitListItem,
   CircuitStatus,
@@ -43,14 +44,23 @@ function formatRelativeTime(dateString: string): string {
 }
 
 function formatFeaturesDisplay(
-  features: (number | boolean)[][] | undefined,
+  features: CircuitFeatureTargetInput[] | undefined,
   maxLength: number,
 ): string {
   if (!features || features.length === 0) return 'No features'
 
   const featureStrings = features.map((f) => {
-    const [layer, index, pos, isLorsa] = f as [number, number, number, boolean]
-    return `${isLorsa ? 'A' : 'M'}${layer}#${index}@${pos}`
+    if (Array.isArray(f)) {
+      const [layer, index, pos, isLorsa] = f
+      return `${isLorsa ? 'A' : 'M'}${layer}#${index}@${pos}`
+    }
+    const layer = f.saeName.match(/layer(\d+)/)?.[1] ?? '?'
+    const prefix = f.saeName.includes('matryoshka')
+      ? 'R'
+      : f.saeName.includes('lorsa')
+        ? 'A'
+        : 'M'
+    return `${prefix}${layer}#${f.featureIndex}@${f.position}`
   })
 
   const combined = featureStrings.join(', ')

@@ -27,7 +27,8 @@ export const Nodes: React.FC<NodesProps> = React.memo(
     const isErrorNode = useCallback(
       (d: PositionedNode) =>
         d.featureType === 'lorsa error' ||
-        d.featureType === 'mlp reconstruction error',
+        d.featureType === 'mlp reconstruction error' ||
+        d.featureType === 'residual reconstruction error',
       [],
     )
 
