@@ -339,7 +339,7 @@ def greedily_collect_attribution(
         reduction_weight, dimensions=(targets.dimension,)
     )
     for i in tqdm(range(0, remaining_budget, batch_size), desc="OV Attribution"):
-        available = intermediates.downstream.dimension - collected
+        available = (intermediates.downstream.dimension - collected).unique()
         cur_batch_size = min(batch_size, remaining_budget - i, len(available))
         if cur_batch_size == 0:
             break
@@ -349,7 +349,12 @@ def greedily_collect_attribution(
 
         influence = reduction_weight_vec @ intermediates_attribution[None, intermediates.downstream.dimension]
 
-        _, selected_nodes = influence.topk(k=cur_batch_size, ignore_dimension=collected)
+        # Select from the remaining logical nodes directly. Masking the full
+        # replicated DTensor with ``ignore_dimension`` can reselect collected
+        # nodes when the dimension contains duplicate logical indices.
+        available_influence = influence[available]
+        _, selected_nodes = available_influence.topk(k=cur_batch_size)
+        selected_nodes = selected_nodes.unique()
 
         collected = collected + selected_nodes
 
