@@ -302,7 +302,9 @@ class NodeDimension(PyTree):
     def __sub__(self, other: "NodeDimension") -> "NodeDimension":
         """Return a new NodeDimension with every ``(key, index)`` pair present in ``other`` removed from ``self``."""
         lookup = other.nodes_to_offsets(self)
-        kept = (lookup == -1).nonzero().squeeze(-1)
+        kept = (full_tensor(lookup) == -1).nonzero().squeeze(-1)
+        if self.device_mesh is not None:
+            kept = DimMap({}).from_local(kept, self.device_mesh)
         return self.offsets_to_nodes(kept)
 
     def __len__(self) -> int:
