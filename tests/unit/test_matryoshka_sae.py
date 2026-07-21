@@ -16,6 +16,7 @@ from llamascopium import (
     TrainerConfig,
     TrainSAESettings,
 )
+from llamascopium.circuits.attribution import _require_active_matryoshka_nodes
 from llamascopium.models.sparse_dictionary import SparseDictionary
 
 
@@ -66,6 +67,62 @@ def test_matryoshka_feature_range_rejects_unconfigured_boundary():
 
     with pytest.raises(ValueError, match="boundaries must come from"):
         sae.encode(torch.ones(1, 2), matryoshka_feature_range=(1, 4))
+
+
+def test_matryoshka_feature_range_supports_combined_intermediate_segments():
+    cfg = MatryoshkaSAEConfig(
+        hook_point_in="in",
+        hook_point_out="out",
+        d_model=2,
+        expansion_factor=2,
+        device="cpu",
+        dtype=torch.float32,
+        norm_activation="inference",
+        use_decoder_bias=False,
+        act_fn="relu",
+        sparsity_include_decoder_norm=False,
+        matryoshka_widths=[1, 2, 4],
+    )
+    sae = MatryoshkaSparseAutoEncoder(cfg)
+    with torch.no_grad():
+        sae.W_E.fill_(1.0)
+        sae.b_E.zero_()
+
+    actual = sae.encode(torch.ones(1, 2), matryoshka_feature_range=(1, 4))
+
+    assert torch.equal(actual, torch.tensor([[0.0, 2.0, 2.0, 2.0]]))
+
+
+def test_circuit_requires_active_matryoshka_feature_at_final_position():
+    sae = _build_range_test_sae()
+    key = "out.sae.hook_feature_acts"
+
+    required = _require_active_matryoshka_nodes(
+        [sae],
+        {key: torch.tensor([[0, 1], [1, 2]])},
+        final_position=1,
+        feature_range=(2, 4),
+        device="cpu",
+        device_mesh=None,
+    )
+
+    assert len(required) == 1
+    assert torch.equal(required.node_mappings[key].indices, torch.tensor([[1, 2]]))
+
+
+def test_circuit_rejects_segment_without_final_position_activation():
+    sae = _build_range_test_sae()
+    key = "out.sae.hook_feature_acts"
+
+    with pytest.raises(ValueError, match=r"no active features.*final token.*\[2, 4\)"):
+        _require_active_matryoshka_nodes(
+            [sae],
+            {key: torch.tensor([[0, 2]])},
+            final_position=1,
+            feature_range=(2, 4),
+            device="cpu",
+            device_mesh=None,
+        )
 
 
 def test_circuit_config_supports_named_targets_and_legacy_targets():

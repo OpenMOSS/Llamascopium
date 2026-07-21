@@ -19,6 +19,7 @@ key (e.g. (token_pos, feature_idx)) use :func:`_ni2`.
 import pytest
 import torch
 
+from llamascopium.circuits.attribution import prune_attribution
 from llamascopium.circuits.indexed_tensor import (
     NodeDimension,
     NodeIndexedMatrix,
@@ -44,6 +45,40 @@ def _ni2(key: str, *pairs: tuple[int, int]) -> NodeInfo:
 
 def _dim(*node_infos: NodeInfo) -> NodeDimension:
     return NodeDimension.from_node_infos(list(node_infos))
+
+
+def test_prune_attribution_preserves_required_node_path():
+    targets = _dim(_ni("logits", 0))
+    required = _dim(_ni2("matry", (1, 3000)))
+    other = _dim(_ni2("other", (1, 7)))
+    rows = targets + required + other
+    sources = _dim(_ni("hook_embed", 0), _ni("blocks.0.error", 0)) + required + other
+    attribution = NodeIndexedMatrix.from_data(
+        torch.tensor(
+            [
+                [0.0, 0.0, 0.01, 100.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+            ]
+        ),
+        dimensions=(rows, sources),
+    )
+
+    pruned = prune_attribution(
+        attribution,
+        reduction_weight=torch.ones(1),
+        node_threshold=0.6,
+        edge_threshold=0.6,
+        targets=targets,
+        required_nodes=required,
+    )
+
+    target_row = rows.nodes_to_offsets(targets).item()
+    required_row = rows.nodes_to_offsets(required).item()
+    required_source = sources.nodes_to_offsets(required).item()
+    embed_source = sources.nodes_to_offsets(_dim(_ni("hook_embed", 0))).item()
+    assert pruned.data[target_row, required_source] != 0
+    assert pruned.data[required_row, embed_source] != 0
 
 
 # ---------------------------------------------------------------------------

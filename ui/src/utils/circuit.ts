@@ -1,4 +1,72 @@
-import type { Node } from '@/types/circuit'
+import type { CircuitData, Node } from '@/types/circuit'
+import type { MatryoshkaFeatureRange } from '@/api/circuits'
+
+export function filterCircuitByMatryoshkaRange(
+  data: CircuitData,
+  range: MatryoshkaFeatureRange,
+): CircuitData {
+  const [start, end] = range
+  const selectedMatryoshkaIds = new Set(
+    data.nodes
+      .filter(
+        (node) =>
+          node.featureType === 'matryoshka sae' &&
+          node.feature.featureIndex >= start &&
+          node.feature.featureIndex < end,
+      )
+      .map((node) => node.nodeId),
+  )
+
+  if (selectedMatryoshkaIds.size === 0) {
+    return { ...data, nodes: [], edges: [] }
+  }
+
+  const incoming = new Map<string, string[]>()
+  const outgoing = new Map<string, string[]>()
+  for (const edge of data.edges) {
+    incoming.set(edge.target, [
+      ...(incoming.get(edge.target) ?? []),
+      edge.source,
+    ])
+    outgoing.set(edge.source, [
+      ...(outgoing.get(edge.source) ?? []),
+      edge.target,
+    ])
+  }
+
+  const nodeById = new Map(data.nodes.map((node) => [node.nodeId, node]))
+  const keep = new Set(selectedMatryoshkaIds)
+
+  const visit = (frontier: string[], adjacency: Map<string, string[]>) => {
+    while (frontier.length > 0) {
+      const current = frontier.pop()!
+      for (const adjacent of adjacency.get(current) ?? []) {
+        const node = nodeById.get(adjacent)
+        if (
+          !node ||
+          keep.has(adjacent) ||
+          (node.featureType === 'matryoshka sae' &&
+            !selectedMatryoshkaIds.has(adjacent))
+        ) {
+          continue
+        }
+        keep.add(adjacent)
+        frontier.push(adjacent)
+      }
+    }
+  }
+
+  visit([...selectedMatryoshkaIds], incoming)
+  visit([...selectedMatryoshkaIds], outgoing)
+
+  return {
+    ...data,
+    nodes: data.nodes.filter((node) => keep.has(node.nodeId)),
+    edges: data.edges.filter(
+      (edge) => keep.has(edge.source) && keep.has(edge.target),
+    ),
+  }
+}
 
 export function extractLayerAndFeature(
   nodeId: string,

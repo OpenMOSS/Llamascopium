@@ -9,11 +9,13 @@ import { AlertCircle, GitFork, Loader2 } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { z } from 'zod'
 import type { CircuitData, FeatureNode, VisState } from '@/types/circuit'
+import type { MatryoshkaFeatureRange } from '@/api/circuits'
 import { parseWithPrettify } from '@/utils/zod'
 import {
   circuitQueryOptions,
   circuitStatusQueryOptions,
   circuitsQueryOptions,
+  fetchMatryoshkaRanges,
   generateCircuit,
   saeSetsQueryOptions,
 } from '@/api/circuits'
@@ -23,10 +25,12 @@ import { LinkGraphContainer } from '@/components/circuits/link-graph-container'
 import { SelectedFeaturesList } from '@/components/circuits/selected-features-list'
 import { NodeConnections } from '@/components/circuits/node-connections'
 import { ThresholdControls } from '@/components/circuits/threshold-controls'
+import { MatryoshkaSubgraphControl } from '@/components/circuits/matryoshka-subgraph-control'
 import { FeatureCardHorizontal } from '@/components/feature/feature-card-horizontal'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { createRawEdgeIndex, createRawNodeIndex } from '@/utils/circuit-index'
+import { filterCircuitByMatryoshkaRange } from '@/utils/circuit'
 
 const searchParamsSchema = z.object({
   clickedId: z.string().optional(),
@@ -34,6 +38,7 @@ const searchParamsSchema = z.object({
   selectedIds: z.string().optional(),
   nodeThreshold: z.coerce.number().optional(),
   edgeThreshold: z.coerce.number().optional(),
+  matryoshkaSubrange: z.string().optional(),
 })
 
 export const Route = createFileRoute('/circuit/$id/')({
@@ -91,41 +96,85 @@ function CircuitPage() {
     enabled: statusData?.status === 'completed',
   })
 
+  const tracedMatryoshkaRange =
+    circuitData?.config.matryoshkaFeatureRange ?? null
+  const { data: matryoshkaOptions } = useQuery({
+    queryKey: ['matryoshka-ranges', circuitData?.saeSetName],
+    queryFn: () =>
+      fetchMatryoshkaRanges({
+        data: { saeSetName: circuitData!.saeSetName },
+      }),
+    enabled: Boolean(circuitData?.saeSetName && tracedMatryoshkaRange),
+  })
+
+  const availableMatryoshkaSubranges = useMemo(() => {
+    if (!tracedMatryoshkaRange || !matryoshkaOptions || !circuitData) return []
+    const [tracedStart, tracedEnd] = tracedMatryoshkaRange
+    return matryoshkaOptions.atomicSegments.filter(
+      ([start, end]) =>
+        start >= tracedStart &&
+        end <= tracedEnd &&
+        circuitData.graphData.nodes.some(
+          (node) =>
+            node.featureType === 'matryoshka sae' &&
+            node.feature.featureIndex >= start &&
+            node.feature.featureIndex < end,
+        ),
+    )
+  }, [circuitData, matryoshkaOptions, tracedMatryoshkaRange])
+
+  const selectedMatryoshkaSubrange = useMemo(() => {
+    if (!search.matryoshkaSubrange) return null
+    const values = search.matryoshkaSubrange.split(':').map(Number)
+    if (values.length !== 2 || values.some((value) => !Number.isFinite(value)))
+      return null
+    const range: MatryoshkaFeatureRange = [values[0], values[1]]
+    return availableMatryoshkaSubranges.some(
+      ([start, end]) => start === range[0] && end === range[1],
+    )
+      ? range
+      : null
+  }, [availableMatryoshkaSubranges, search.matryoshkaSubrange])
+
+  const circuit: CircuitData | undefined = useMemo(() => {
+    const rawCircuit = circuitData?.graphData
+    if (!rawCircuit || !selectedMatryoshkaSubrange) return rawCircuit
+    return filterCircuitByMatryoshkaRange(
+      rawCircuit,
+      selectedMatryoshkaSubrange,
+    )
+  }, [circuitData?.graphData, selectedMatryoshkaSubrange])
+
   // Get clickedId, hiddenIds, and selectedIds and filter them to only include nodes that exist in the graph data
   const clickedId = useMemo(
     () =>
-      circuitData?.graphData.nodes.find((n) => n.nodeId === search.clickedId)
-        ?.nodeId || null,
-    [search.clickedId, circuitData],
+      circuit?.nodes.find((n) => n.nodeId === search.clickedId)?.nodeId || null,
+    [search.clickedId, circuit],
   )
   const hiddenIds = useMemo(
     () =>
       search.hiddenIds
         ? search.hiddenIds
             .split(',')
-            .filter((id) =>
-              circuitData?.graphData.nodes.find((n) => n.nodeId === id),
-            )
+            .filter((id) => circuit?.nodes.find((n) => n.nodeId === id))
         : [],
-    [search.hiddenIds, circuitData?.graphData.nodes],
+    [search.hiddenIds, circuit],
   )
   const selectedIds = useMemo(
     () =>
       search.selectedIds
         ? search.selectedIds
             .split(',')
-            .filter((id) =>
-              circuitData?.graphData.nodes.find((n) => n.nodeId === id),
-            )
+            .filter((id) => circuit?.nodes.find((n) => n.nodeId === id))
         : [],
-    [search.selectedIds, circuitData?.graphData.nodes],
+    [search.selectedIds, circuit],
   )
 
   const queryClient = useQueryClient()
 
   const { mutate: doGenerateCircuit, isPending: isGenerating } = useMutation({
     mutationFn: generateCircuit,
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       handleGraphCreated(data.circuitId)
     },
   })
@@ -196,8 +245,6 @@ function CircuitPage() {
     })
   }, [circuitData, selectedIds, doGenerateCircuit, circuitId])
 
-  const circuit: CircuitData | undefined = circuitData?.graphData
-
   const rawNodeIndex = useMemo(
     () => (circuit ? createRawNodeIndex(circuit.nodes) : null),
     [circuit],
@@ -218,6 +265,22 @@ function CircuitPage() {
     })
     setHoveredId(null)
   }
+
+  const handleMatryoshkaSubrangeChange = useCallback(
+    (range: MatryoshkaFeatureRange | null) => {
+      navigate({
+        search: (prev) => ({
+          ...prev,
+          clickedId: undefined,
+          selectedIds: undefined,
+          matryoshkaSubrange: range?.join(':'),
+        }),
+        replace: true,
+      })
+      setHoveredId(null)
+    },
+    [navigate],
+  )
 
   const visState: VisState = useMemo(
     () => ({
@@ -449,6 +512,17 @@ function CircuitPage() {
         <div className="flex-1 flex flex-col overflow-hidden px-20 pb-20">
           <div className="flex gap-6 flex-1 overflow-hidden">
             <div className="flex flex-col gap-6 min-w-0 w-3/4 shrink-0">
+              {tracedMatryoshkaRange &&
+                availableMatryoshkaSubranges.length > 1 && (
+                  <div className="flex justify-end shrink-0">
+                    <MatryoshkaSubgraphControl
+                      tracedRange={tracedMatryoshkaRange}
+                      atomicSegments={availableMatryoshkaSubranges}
+                      selectedRange={selectedMatryoshkaSubrange}
+                      onChange={handleMatryoshkaSubrangeChange}
+                    />
+                  </div>
+                )}
               <LinkGraphContainer
                 data={circuit}
                 visState={visState}

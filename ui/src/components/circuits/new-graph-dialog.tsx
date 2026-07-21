@@ -406,16 +406,14 @@ export function NewGraphDialog({
                             Prefix [{start}, {end})
                           </SelectItem>
                         ))}
-                        {matryoshkaOptions.segments
-                          .filter(([start]) => start > 0)
-                          .map(([start, end]) => (
-                            <SelectItem
-                              key={`segment-${start}-${end}`}
-                              value={`${start}:${end}`}
-                            >
-                              Segment [{start}, {end})
-                            </SelectItem>
-                          ))}
+                        {matryoshkaOptions.segments.map(([start, end]) => (
+                          <SelectItem
+                            key={`range-${start}-${end}`}
+                            value={`${start}:${end}`}
+                          >
+                            Range [{start}, {end})
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>

@@ -32,6 +32,7 @@ from llamascopium.circuits.indexed_tensor import (
 from llamascopium.core.pytree import PyTree
 from llamascopium.core.serialize import migrate
 from llamascopium.models.lorsa import LowRankSparseAttention
+from llamascopium.models.matryoshka_sae import MatryoshkaSparseAutoEncoder
 from llamascopium.models.molt import MixtureOfLinearTransform
 from llamascopium.models.sae import SparseAutoEncoder
 from llamascopium.models.sparse_dictionary import SparseDictionary
@@ -285,6 +286,7 @@ def greedily_collect_attribution(
     intermediates: IntermediateRefs,
     max_intermediates: int,
     reduction_weight: torch.Tensor,
+    required_intermediates: NodeDimension | None = None,
     max_iter: int = 100,
 ) -> tuple[NodeIndexedMatrix, NodeDimension]:
     """Greedily collect attribution from targets to sources through intermediates."""
@@ -314,15 +316,31 @@ def greedily_collect_attribution(
     for target_batch in targets.iter_batches(batch_size):
         attribution[target_batch.dimension, None] = per_target_attribution(target_batch).to(attribution.data.dtype)
 
-    collected = NodeDimension.empty(
-        device=targets.device,
-        device_mesh=targets.device_mesh,
+    collected = (
+        required_intermediates.unique()
+        if required_intermediates is not None
+        else NodeDimension.empty(device=targets.device, device_mesh=targets.device_mesh)
     )
+    collected = collected - targets.dimension
+    if len(collected) > 0:
+        attribution.add_targets(
+            collected,
+            per_target_attribution(intermediates.upstream[collected]).to(attribution.data.dtype),
+        )
+
+    max_intermediates = min(
+        max(max_intermediates, len(collected)),
+        len(intermediates.downstream.dimension),
+    )
+    remaining_budget = max_intermediates - len(collected)
     reduction_weight_vec: NodeIndexedVector = NodeIndexedVector.from_data(
         reduction_weight, dimensions=(targets.dimension,)
     )
-    for i in tqdm(range(0, max_intermediates, batch_size), desc="OV Attribution"):
-        cur_batch_size = min(batch_size, max_intermediates - i)
+    for i in tqdm(range(0, remaining_budget, batch_size), desc="OV Attribution"):
+        available = intermediates.downstream.dimension - collected
+        cur_batch_size = min(batch_size, remaining_budget - i, len(available))
+        if cur_batch_size == 0:
+            break
         intermediates_attribution = compute_intermediates_attribution(
             attribution, targets.dimension, collected, max_iter
         )
@@ -340,6 +358,34 @@ def greedily_collect_attribution(
         )
 
     return attribution, collected
+
+
+def _require_active_matryoshka_nodes(
+    replacement_modules: list[SparseAutoEncoder | LowRankSparseAttention | MixtureOfLinearTransform],
+    intermediate_indices: dict[str, torch.Tensor],
+    final_position: int,
+    feature_range: tuple[int, int] | None,
+    device: torch.device | str,
+    device_mesh: DeviceMesh | None,
+) -> NodeDimension:
+    """Return active Matryoshka nodes at the final token or reject the trace."""
+    required: list[NodeInfo] = []
+    for module in replacement_modules:
+        if not isinstance(module, MatryoshkaSparseAutoEncoder):
+            continue
+        key = module.cfg.hook_point_out + ".sae.hook_feature_acts"
+        indices = intermediate_indices[key]
+        final_indices = indices[indices[:, 0] == final_position]
+        if len(final_indices) == 0:
+            range_label = "full range" if feature_range is None else f"[{feature_range[0]}, {feature_range[1]})"
+            raise ValueError(
+                f"Matryoshka SAE at {module.cfg.hook_point_out} has no active features "
+                f"at the final token position {final_position} in {range_label}. "
+                "Choose a range containing at least one final-token activation."
+            )
+        required.append(NodeInfo(key=key, indices=final_indices))
+
+    return NodeDimension.from_node_infos(required, device=device, device_mesh=device_mesh)
 
 
 def ln_detach_hooks(model: TransformerLensLanguageModel) -> list[str]:
@@ -383,6 +429,7 @@ def prune_attribution(
     node_threshold: float = 0.6,
     edge_threshold: float = 0.8,
     targets: NodeDimension | None = None,
+    required_nodes: NodeDimension | None = None,
 ) -> NodeIndexedMatrix:
     """Prune an attribution NodeIndexedMatrix by removing low-influence nodes and edges.
 
@@ -407,6 +454,8 @@ def prune_attribution(
             are targets vs intermediates. When ``None``, defaults to rows with
             key ``"logits"`` for backward compatibility with logit-target
             attributions.
+        required_nodes: Intermediate nodes that must survive influence pruning
+            when they have non-zero target and upstream attribution edges.
 
     Returns:
         Pruned NodeIndexedMatrix containing only kept nodes and edges.
@@ -433,6 +482,30 @@ def prune_attribution(
 
     node_mask = node_scores.map(lambda x: x >= _find_influence_threshold(x, node_threshold))
     edge_mask = edge_scores.map(lambda x: x >= _find_influence_threshold(x, edge_threshold))
+
+    if required_nodes is not None and len(required_nodes) > 0:
+        required_source_offsets = attribution.dimensions[1].nodes_to_offsets(required_nodes)
+        required_row_offsets = attribution.dimensions[0].nodes_to_offsets(required_nodes)
+        required_source_offsets = required_source_offsets[required_source_offsets >= 0]
+        required_row_offsets = required_row_offsets[required_row_offsets >= 0]
+        target_offsets = attribution.dimensions[0].nodes_to_offsets(targets)
+
+        node_mask.data[required_source_offsets] = True
+
+        if len(required_source_offsets) > 0 and len(target_offsets) > 0:
+            target_grid = target_offsets[:, None]
+            source_grid = required_source_offsets[None, :]
+            nonzero_target_edges = attribution.data[target_grid, source_grid] != 0
+            edge_mask.data[target_grid, source_grid] |= nonzero_target_edges
+
+        if len(required_row_offsets) > 0:
+            required_rows = attribution.data[required_row_offsets].abs()
+            strongest_values, strongest_sources = required_rows.max(dim=1)
+            nonzero_rows = strongest_values > 0
+            edge_mask.data[
+                required_row_offsets[nonzero_rows],
+                strongest_sources[nonzero_rows],
+            ] = True
 
     old_node_mask = node_mask.clone()
     node_mask[optional_sources] = node_mask[optional_sources] & edge_mask[None, optional_sources].any(0)
@@ -645,15 +718,30 @@ def attribute(
         ]
     )
 
-    intermediate_entries = [
-        (
-            rm.cfg.hook_point_out + ".sae.hook_feature_acts",
-            nonzero(cache[rm.cfg.hook_point_out + ".sae.hook_feature_acts.pre"][0]),
-            cache[rm.cfg.hook_point_out + ".sae.hook_feature_acts.pre"],
-            cache[rm.cfg.hook_point_out + ".sae.hook_feature_acts.post"],
+    intermediate_entries = []
+    intermediate_indices: dict[str, torch.Tensor] = {}
+    for rm in replacement_modules:
+        key = rm.cfg.hook_point_out + ".sae.hook_feature_acts"
+        indices = nonzero(cache[key + ".pre"][0])
+        full_indices = full_tensor(indices)
+        intermediate_indices[key] = full_indices
+        intermediate_entries.append(
+            (
+                key,
+                indices,
+                cache[key + ".pre"],
+                cache[key + ".post"],
+            )
         )
-        for rm in replacement_modules
-    ]
+
+    required_matryoshka_nodes = _require_active_matryoshka_nodes(
+        replacement_modules,
+        intermediate_indices,
+        final_position=seq_len - 1,
+        feature_range=matryoshka_feature_range,
+        device=model.device,
+        device_mesh=model.device_mesh,
+    )
     intermediates = IntermediateRefs(
         upstream=NodeRefs.from_nodes_and_refs([(key, idx, pre) for key, idx, pre, _ in intermediate_entries]),
         downstream=NodeRefs.from_nodes_and_refs([(key, idx, post) for key, idx, _, post in intermediate_entries]),
@@ -668,6 +756,7 @@ def attribute(
         intermediates=intermediates,
         max_intermediates=max_intermediates,
         reduction_weight=reduction_weight,
+        required_intermediates=required_matryoshka_nodes,
         max_iter=max_iter,
     )
 

@@ -21,6 +21,7 @@ from llamascopium import (
     MOLTConfig,
     NodeDimension,
     NodeIndexed,
+    NodeInfo,
     SAEConfig,
     TransformerLensLanguageModel,
     prune_attribution,
@@ -147,27 +148,31 @@ def get_matryoshka_range_options(sae_set_name: str) -> dict[str, Any]:
         if isinstance((cfg := get_sae_cfg(name=sae_name)), MatryoshkaSAEConfig)
     ]
     if not configs:
-        return {"sae_names": [], "prefixes": [], "segments": []}
+        return {"sae_names": [], "prefixes": [], "segments": [], "atomic_segments": []}
 
-    prefix_sets: list[set[tuple[int, int]]] = []
-    segment_sets: list[set[tuple[int, int]]] = []
+    boundary_sets: list[set[int]] = []
     for _, cfg in configs:
-        boundaries = [0, *cfg.matryoshka_widths]
-        prefix_sets.append({(0, end) for end in cfg.matryoshka_widths})
-        segment_sets.append(set(zip(boundaries[:-1], boundaries[1:])))
+        boundary_sets.append({0, *cfg.matryoshka_widths})
 
-    common_prefixes = set.intersection(*prefix_sets)
-    common_segments = set.intersection(*segment_sets)
+    common_boundaries = sorted(set.intersection(*boundary_sets))
+    prefixes = [(0, end) for end in common_boundaries[1:]]
+    segments = [
+        (start, end)
+        for start_idx, start in enumerate(common_boundaries[1:], start=1)
+        for end in common_boundaries[start_idx + 1 :]
+    ]
+    atomic_segments = list(zip(common_boundaries[:-1], common_boundaries[1:]))
     return {
         "sae_names": [name for name, _ in configs],
-        "prefixes": sorted(common_prefixes),
-        "segments": sorted(common_segments),
+        "prefixes": prefixes,
+        "segments": segments,
+        "atomic_segments": atomic_segments,
     }
 
 
 @router.get("/sae-sets/{sae_set_name}/matryoshka-ranges")
 def list_matryoshka_ranges(sae_set_name: str):
-    """List selectable Matryoshka prefixes and adjacent feature segments."""
+    """List selectable Matryoshka ranges and their atomic subsegments."""
     try:
         return get_matryoshka_range_options(sae_set_name)
     except ValueError as exc:
@@ -242,6 +247,32 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
     if ar is None:
         raise ValueError(f"Attribution data not found for circuit {circuit_id}")
 
+    sae_set = client.get_sae_set(name=circuit.sae_set_name)
+    if sae_set is None:
+        raise ValueError(f"SAE set {circuit.sae_set_name} not found")
+    sae_configs = [(sae_name, get_sae_cfg(name=sae_name)) for sae_name in sae_set.sae_names]
+
+    required_matryoshka_nodes = NodeDimension.empty(device=ar.attribution.data.device)
+    if circuit.config.matryoshka_feature_range is not None and ar.prompt_token_ids:
+        final_position = len(ar.prompt_token_ids) - 1
+        matryoshka_keys = {
+            cfg.hook_point_out + ".sae.hook_feature_acts"
+            for _, cfg in sae_configs
+            if isinstance(cfg, MatryoshkaSAEConfig)
+        }
+        required_infos = []
+        for key in matryoshka_keys:
+            node = ar.attribution.dimensions[1].node_mappings.get(key)
+            if node is None:
+                continue
+            indices = node.indices[node.indices[:, 0] == final_position]
+            if len(indices) > 0:
+                required_infos.append(NodeInfo(key=key, indices=indices))
+        required_matryoshka_nodes = NodeDimension.from_node_infos(
+            required_infos,
+            device=ar.attribution.data.device,
+        )
+
     if ar.probs is not None:
         reduction_weight = ar.probs
     else:
@@ -255,15 +286,11 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
         node_threshold=node_threshold,
         edge_threshold=edge_threshold,
         targets=ar.targets,
+        required_nodes=required_matryoshka_nodes,
     )
 
-    sae_set = client.get_sae_set(name=circuit.sae_set_name)
-    if sae_set is None:
-        raise ValueError(f"SAE set {circuit.sae_set_name} not found")
-
     sae_metadata: dict[str, dict[str, Any]] = {}
-    for sae_name in sae_set.sae_names:
-        cfg = get_sae_cfg(name=sae_name)
+    for sae_name, cfg in sae_configs:
         assert isinstance(cfg, SAEConfig | LorsaConfig | MOLTConfig)
         is_matryoshka = isinstance(cfg, MatryoshkaSAEConfig)
         if is_matryoshka and circuit.config.matryoshka_feature_range is None:
@@ -551,6 +578,8 @@ def run_circuit_attribution(
                     if isinstance(target, CircuitFeatureTarget):
                         sae = replacement_saes.get(target.sae_name)
                         assert sae is not None, f"SAE {target.sae_name} is not enabled in set {sae_set_name}"
+                        cfg = sae.cfg
+                        assert isinstance(cfg, SAEConfig | LorsaConfig | MOLTConfig)
                         if isinstance(sae, MatryoshkaSparseAutoEncoder):
                             assert request.matryoshka_feature_range is not None
                             start, end = request.matryoshka_feature_range
@@ -559,7 +588,7 @@ def run_circuit_attribution(
                             )
                         feature_targets.append(
                             (
-                                sae.cfg.hook_point_out + ".sae.hook_feature_acts",
+                                cfg.hook_point_out + ".sae.hook_feature_acts",
                                 target.position,
                                 target.feature_index,
                             )

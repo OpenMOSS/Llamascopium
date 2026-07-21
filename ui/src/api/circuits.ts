@@ -133,6 +133,7 @@ export interface MatryoshkaRangeOptions {
   saeNames: string[]
   prefixes: MatryoshkaFeatureRange[]
   segments: MatryoshkaFeatureRange[]
+  atomicSegments: MatryoshkaFeatureRange[]
 }
 
 export const fetchMatryoshkaRanges = createServerFn({ method: 'GET' })
