@@ -323,10 +323,12 @@ def greedily_collect_attribution(
     )
     collected = collected - targets.dimension
     if len(collected) > 0:
-        attribution.add_targets(
-            collected,
-            per_target_attribution(intermediates.upstream[collected]).to(attribution.data.dtype),
-        )
+        required_refs = intermediates.upstream[collected]
+        for required_batch in required_refs.iter_batches(batch_size):
+            attribution.add_targets(
+                required_batch.dimension,
+                per_target_attribution(required_batch).to(attribution.data.dtype),
+            )
 
     max_intermediates = min(
         max(max_intermediates, len(collected)),
