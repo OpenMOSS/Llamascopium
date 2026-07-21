@@ -42,7 +42,28 @@ from llamascopium.utils.misc import ensure_tokenized
 from llamascopium.utils.timer import timer
 
 logger = logging.getLogger(__name__)
+# Debugging
+def debug_stage(stage: str, **values):
+    rank = (
+        torch.distributed.get_rank()
+        if torch.distributed.is_initialized()
+        else 0
+    )
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        reserved = torch.cuda.memory_reserved() / 1024**3
+    else:
+        allocated = reserved = 0
 
+    details = " ".join(f"{key}={value}" for key, value in values.items())
+    print(
+        f"[CircuitDebug][rank={rank}] {stage} "
+        f"allocated={allocated:.2f}GiB reserved={reserved:.2f}GiB "
+        f"{details}",
+        flush=True,
+    )
+    
 
 @dataclass
 class NodeRefs:
@@ -304,14 +325,25 @@ def greedily_collect_attribution(
 
     @timer.time("per_target_attribution")
     def per_target_attribution(targets: NodeRefs) -> torch.Tensor:
+        
+        debug_stage("backward.root.begin", targets=len(targets.dimension))
+        
         root = maybe_local_map(torch.diag)(torch.cat(targets.values, dim=1))
+        
+        debug_stage("backward.root.end", root_shape=tuple(root.shape))
+        debug_stage("autograd.grad.begin")
         grad_refs = torch.autograd.grad(
             root.sum(),
             all_sources.refs(),
             retain_graph=True,
             materialize_grads=True,
         )
-        return attribution_scores(grad_refs, all_sources)[: root.shape[0]]
+        debug_stage("autograd.grad.end")
+
+        debug_stage("attribution_scores.begin")
+        scores = attribution_scores(grad_refs, all_sources)[:root.shape[0]]
+        debug_stage("attribution_scores.end", shape=tuple(scores.shape))
+        return scores
 
     for target_batch in targets.iter_batches(batch_size):
         attribution[target_batch.dimension, None] = per_target_attribution(target_batch).to(attribution.data.dtype)
@@ -338,26 +370,80 @@ def greedily_collect_attribution(
     reduction_weight_vec: NodeIndexedVector = NodeIndexedVector.from_data(
         reduction_weight, dimensions=(targets.dimension,)
     )
+    
+
+    
     for i in tqdm(range(0, remaining_budget, batch_size), desc="OV Attribution"):
+        
+        #Debugging
+        step = i // batch_size
+        debug_stage("iteration.begin", step=step, collected=len(collected))
+        debug_stage("available.begin", step=step)
+        # End of debugging
+        
         available = intermediates.downstream.dimension - collected
+        
+        # Debugging 
+        debug_stage("available.end", step=step, available=len(available))
+        
         cur_batch_size = min(batch_size, remaining_budget - i, len(available))
+        
+        # Debugging
         if cur_batch_size == 0:
+            debug_stage("iteration.no_candidates", step=step)
             break
+        debug_stage("compute_intermediates.begin", step=step)
+
         intermediates_attribution = compute_intermediates_attribution(
             attribution, targets.dimension, collected, max_iter
+        )
+        
+        # Debugging
+        debug_stage(
+            "compute_intermediates.end",
+            step=step,
+            shape=tuple(intermediates_attribution.data.shape),
         )
 
         influence = reduction_weight_vec @ intermediates_attribution[None, intermediates.downstream.dimension]
 
+
+        # Debugging
+        debug_stage("influence.end", step=step)
+
+        debug_stage("topk.begin", step=step, k=cur_batch_size)
+
+
         _, selected_nodes = influence.topk(k=cur_batch_size, ignore_dimension=collected)
+        debug_stage("topk.end", step=step, selected=len(selected_nodes))
 
         collected = collected + selected_nodes
 
         selected_refs = intermediates.upstream[selected_nodes]
+        
+        
+        debug_stage("backward.begin", step=step)
+        selected_attribution = per_target_attribution(selected_refs)
+        debug_stage(
+            "backward.end",
+            step=step,
+            shape=tuple(selected_attribution.shape),
+        )
+
+        debug_stage("add_targets.begin", step=step)
         attribution.add_targets(
             selected_nodes,
-            per_target_attribution(selected_refs).to(attribution.data.dtype),
+            selected_attribution.to(attribution.data.dtype),
         )
+        debug_stage("iteration.end", step=step, collected=len(collected))
+            
+        
+        
+        
+        # attribution.add_targets(
+        #     selected_nodes,
+        #     per_target_attribution(selected_refs).to(attribution.data.dtype),
+        # )
 
     return attribution, collected
 
