@@ -652,11 +652,11 @@ def create_circuit(sae_set_name: str, request: GenerateCircuitRequest, backgroun
 
     model_name = client.get_sae_model_name(sae_names[0], sae_set.sae_series)
     model = get_model(name=model_name, device_mesh=None)
-    if not isinstance(model, TransformerLensLanguageModel):
-        return Response(
-            content="Circuit tracing only supports TransformerLens backend",
-            status_code=400,
-        )
+    # if not isinstance(model, TransformerLensLanguageModel):
+    #     return Response(
+    #         content="Circuit tracing only supports TransformerLens backend",
+    #         status_code=400,
+    #     )
 
     # Determine prompt
     assert model.tokenizer is not None, "Circuit generation requires a tokenizer"

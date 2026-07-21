@@ -125,7 +125,7 @@ class DistributedWorkerRegistry:
         return task_id
 
     @classmethod
-    async def get_result(cls, task_id: str, timeout: float | None = None) -> Any:
+    async def get_result(cls, task_id: str, timeout: float = 600.0) -> Any:
         """Wait for result from rank 0 worker"""
         timeout = timeout if timeout is not None else float(os.environ.get("WORKER_TASK_TIMEOUT", "600"))
         start_time = time.time()
