@@ -100,10 +100,20 @@ class DistributedWorkerRegistry:
                 if rank == 0:
                     result_queue.put((task_id, result))
 
+            # except Exception as e:
+            #     print(f"Worker {rank} error: {e}")
+            #     if rank == 0:
+            #         result_queue.put((task_id, e))
+
             except Exception as e:
-                print(f"Worker {rank} error: {e}")
+                import traceback
+
+                print(f"Worker {rank} error: {e}", flush=True)
+                traceback.print_exc()
+
                 if rank == 0:
                     result_queue.put((task_id, e))
+
 
         if world_size > 1:
             dist.destroy_process_group()
