@@ -272,11 +272,6 @@ class FeatureAnalyzer:
         for batch in activation_stream:
             # Reshape meta to zip outer dimensions to inner
             meta = {k: [m[k] for m in batch["meta"]] for k in batch["meta"][0].keys()}
-            if device_mesh is None:
-                batch = {
-                    k: v.to(sae.cfg.device, non_blocking=True) if isinstance(v, torch.Tensor) else v
-                    for k, v in batch.items()
-                }
 
             # Get feature activations from SAE
             x, encoder_kwargs, _ = sae.prepare_input(batch)
