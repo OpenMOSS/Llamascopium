@@ -142,8 +142,9 @@ function CircuitPage() {
     return filterCircuitByMatryoshkaRange(
       rawCircuit,
       selectedMatryoshkaSubrange,
+      edgeThreshold,
     )
-  }, [circuitData?.graphData, selectedMatryoshkaSubrange])
+  }, [circuitData?.graphData, edgeThreshold, selectedMatryoshkaSubrange])
 
   // Get clickedId, hiddenIds, and selectedIds and filter them to only include nodes that exist in the graph data
   const clickedId = useMemo(

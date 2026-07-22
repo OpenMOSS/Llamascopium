@@ -16,7 +16,7 @@ from llamascopium import (
     TrainerConfig,
     TrainSAESettings,
 )
-from llamascopium.circuits.attribution import _require_active_matryoshka_nodes
+from llamascopium.circuits.attribution import _validate_active_matryoshka_nodes
 from llamascopium.models.sparse_dictionary import SparseDictionary
 
 
@@ -93,21 +93,18 @@ def test_matryoshka_feature_range_supports_combined_intermediate_segments():
     assert torch.equal(actual, torch.tensor([[0.0, 2.0, 2.0, 2.0]]))
 
 
-def test_circuit_requires_active_matryoshka_feature_at_final_position():
+def test_circuit_accepts_active_matryoshka_feature_at_final_position():
     sae = _build_range_test_sae()
     key = "out.sae.hook_feature_acts"
 
-    required = _require_active_matryoshka_nodes(
+    result = _validate_active_matryoshka_nodes(
         [sae],
         {key: torch.tensor([[0, 1], [1, 2]])},
         final_position=1,
         feature_range=(2, 4),
-        device="cpu",
-        device_mesh=None,
     )
 
-    assert len(required) == 1
-    assert torch.equal(required.node_mappings[key].indices, torch.tensor([[1, 2]]))
+    assert result is None
 
 
 def test_circuit_rejects_segment_without_final_position_activation():
@@ -115,13 +112,11 @@ def test_circuit_rejects_segment_without_final_position_activation():
     key = "out.sae.hook_feature_acts"
 
     with pytest.raises(ValueError, match=r"no active features.*final token.*\[2, 4\)"):
-        _require_active_matryoshka_nodes(
+        _validate_active_matryoshka_nodes(
             [sae],
             {key: torch.tensor([[0, 2]])},
             final_position=1,
             feature_range=(2, 4),
-            device="cpu",
-            device_mesh=None,
         )
 
 

@@ -21,7 +21,6 @@ from llamascopium import (
     MOLTConfig,
     NodeDimension,
     NodeIndexed,
-    NodeInfo,
     SAEConfig,
     TransformerLensLanguageModel,
     prune_attribution,
@@ -252,27 +251,6 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
         raise ValueError(f"SAE set {circuit.sae_set_name} not found")
     sae_configs = [(sae_name, get_sae_cfg(name=sae_name)) for sae_name in sae_set.sae_names]
 
-    required_matryoshka_nodes = NodeDimension.empty(device=ar.attribution.data.device)
-    if circuit.config.matryoshka_feature_range is not None and ar.prompt_token_ids:
-        final_position = len(ar.prompt_token_ids) - 1
-        matryoshka_keys = {
-            cfg.hook_point_out + ".sae.hook_feature_acts"
-            for _, cfg in sae_configs
-            if isinstance(cfg, MatryoshkaSAEConfig)
-        }
-        required_infos = []
-        for key in matryoshka_keys:
-            node = ar.attribution.dimensions[1].node_mappings.get(key)
-            if node is None:
-                continue
-            indices = node.indices[node.indices[:, 0] == final_position]
-            if len(indices) > 0:
-                required_infos.append(NodeInfo(key=key, indices=indices))
-        required_matryoshka_nodes = NodeDimension.from_node_infos(
-            required_infos,
-            device=ar.attribution.data.device,
-        )
-
     if ar.probs is not None:
         reduction_weight = ar.probs
     else:
@@ -286,7 +264,6 @@ def load_circuit_graph(*, circuit_id: str, node_threshold: float, edge_threshold
         node_threshold=node_threshold,
         edge_threshold=edge_threshold,
         targets=ar.targets,
-        required_nodes=required_matryoshka_nodes,
     )
 
     sae_metadata: dict[str, dict[str, Any]] = {}

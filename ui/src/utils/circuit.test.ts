@@ -61,4 +61,39 @@ describe('filterCircuitByMatryoshkaRange', () => {
       { source: 'matry-a', target: 'logit', weight: 1 },
     ])
   })
+
+  it('reapplies the edge budget to the selected range upstream', () => {
+    const data: CircuitData = {
+      metadata: { promptTokens: ['x'] },
+      nodes: [
+        node('source-strong', 'embedding'),
+        node('source-weak', 'embedding'),
+        node('mlp-strong', 'cross layer transcoder'),
+        node('mlp-weak', 'cross layer transcoder'),
+        node('matry', 'matryoshka sae', 3000),
+        node('logit', 'logit'),
+      ],
+      edges: [
+        { source: 'source-strong', target: 'mlp-strong', weight: 1 },
+        { source: 'source-weak', target: 'mlp-weak', weight: 1 },
+        { source: 'mlp-strong', target: 'matry', weight: 0.9 },
+        { source: 'mlp-weak', target: 'matry', weight: 0.1 },
+        { source: 'matry', target: 'logit', weight: 1 },
+      ],
+    }
+
+    const filtered = filterCircuitByMatryoshkaRange(data, [2048, 4096], 0.8)
+
+    expect(filtered.nodes.map((item) => item.nodeId)).toEqual([
+      'source-strong',
+      'mlp-strong',
+      'matry',
+      'logit',
+    ])
+    expect(filtered.edges).toEqual([
+      { source: 'source-strong', target: 'mlp-strong', weight: 1 },
+      { source: 'mlp-strong', target: 'matry', weight: 0.9 },
+      { source: 'matry', target: 'logit', weight: 1 },
+    ])
+  })
 })

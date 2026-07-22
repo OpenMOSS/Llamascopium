@@ -453,16 +453,13 @@ def greedily_collect_attribution(
     return attribution, collected
 
 
-def _require_active_matryoshka_nodes(
+def _validate_active_matryoshka_nodes(
     replacement_modules: list[SparseAutoEncoder | LowRankSparseAttention | MixtureOfLinearTransform],
     intermediate_indices: dict[str, torch.Tensor],
     final_position: int,
     feature_range: tuple[int, int] | None,
-    device: torch.device | str,
-    device_mesh: DeviceMesh | None,
-) -> NodeDimension:
-    """Return active Matryoshka nodes at the final token or reject the trace."""
-    required: list[NodeInfo] = []
+) -> None:
+    """Reject a trace whose Matryoshka range is inactive at the final token."""
     for module in replacement_modules:
         if not isinstance(module, MatryoshkaSparseAutoEncoder):
             continue
@@ -476,9 +473,6 @@ def _require_active_matryoshka_nodes(
                 f"at the final token position {final_position} in {range_label}. "
                 "Choose a range containing at least one final-token activation."
             )
-        required.append(NodeInfo(key=key, indices=final_indices))
-
-    return NodeDimension.from_node_infos(required, device=device, device_mesh=device_mesh)
 
 
 def ln_detach_hooks(model: TransformerLensLanguageModel) -> list[str]:
@@ -827,13 +821,11 @@ def attribute(
             )
         )
 
-    required_matryoshka_nodes = _require_active_matryoshka_nodes(
+    _validate_active_matryoshka_nodes(
         replacement_modules,
         intermediate_indices,
         final_position=seq_len - 1,
         feature_range=matryoshka_feature_range,
-        device=model.device,
-        device_mesh=model.device_mesh,
     )
     intermediates = IntermediateRefs(
         upstream=NodeRefs.from_nodes_and_refs([(key, idx, pre) for key, idx, pre, _ in intermediate_entries]),
@@ -849,7 +841,6 @@ def attribute(
         intermediates=intermediates,
         max_intermediates=max_intermediates,
         reduction_weight=reduction_weight,
-        required_intermediates=required_matryoshka_nodes,
         max_iter=max_iter,
     )
 
