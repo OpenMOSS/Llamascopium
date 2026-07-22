@@ -305,6 +305,7 @@ class MatryoshkaSparseAutoEncoder(SparseAutoEncoder):
         hidden_pre = cast(torch.Tensor, ctx["hidden_pre"])
         label_tensor = cast(torch.Tensor, ctx["label"])
         mask = cast(torch.Tensor | None, ctx.get("mask"))
+        ctx["auxk_coefficient"] = auxk_coefficient
 
         full_loss_weight = self.full_matryoshka_loss_weight
         if full_loss_weight != 1.0:

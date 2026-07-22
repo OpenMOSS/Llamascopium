@@ -196,6 +196,7 @@ def train_sae(settings: TrainSAESettings) -> None:
         trainer = Trainer.from_checkpoint(
             sae,
             settings.trainer.from_pretrained_path,
+            total_training_tokens=settings.trainer.total_training_tokens,
         )
         trainer.wandb_logger = wandb_logger
     else:
@@ -433,6 +434,7 @@ def train_crosscoder(settings: TrainCrosscoderSettings) -> None:
         trainer = Trainer.from_checkpoint(
             sae,
             settings.trainer.from_pretrained_path,
+            total_training_tokens=settings.trainer.total_training_tokens,
         )
         trainer.wandb_logger = wandb_logger
     else:
@@ -647,6 +649,7 @@ def train_clt(settings: TrainCLTSettings) -> None:
         trainer = Trainer.from_checkpoint(
             sae,
             settings.trainer.from_pretrained_path,
+            total_training_tokens=settings.trainer.total_training_tokens,
         )
         trainer.wandb_logger = wandb_logger
     else:
@@ -861,6 +864,7 @@ def train_lorsa(settings: TrainLorsaSettings) -> None:
         trainer = Trainer.from_checkpoint(
             sae,
             settings.trainer.from_pretrained_path,
+            total_training_tokens=settings.trainer.total_training_tokens,
         )
         trainer.wandb_logger = wandb_logger
     else:
@@ -1075,6 +1079,7 @@ def train_molt(settings: TrainMOLTSettings) -> None:
         trainer = Trainer.from_checkpoint(
             sae,
             settings.trainer.from_pretrained_path,
+            total_training_tokens=settings.trainer.total_training_tokens,
         )
         trainer.wandb_logger = wandb_logger
     else:

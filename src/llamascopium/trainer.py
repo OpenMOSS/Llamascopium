@@ -230,6 +230,7 @@ class Trainer:
         cls,
         sae: SparseDictionary,
         checkpoint_path: str,
+        total_training_tokens: int | None = None,
     ) -> "Trainer":
         """
         Load a complete checkpoint including model, optimizer, scheduler, and
@@ -265,6 +266,17 @@ class Trainer:
             trainer.k_cold_booting_steps = trainer_state["k_cold_booting_steps"]
             trainer.l1_coefficient_warmup_steps = trainer_state["l1_coefficient_warmup_steps"]
             trainer.checkpoint_thresholds = trainer_state["checkpoint_thresholds"]
+
+            if total_training_tokens is not None and total_training_tokens > trainer.cfg.total_training_tokens:
+                if trainer.total_training_steps <= 0:
+                    raise ValueError("Cannot extend a checkpoint with non-positive total_training_steps")
+                batch_tokens = trainer.cfg.total_training_tokens // trainer.total_training_steps
+                trainer.cfg.total_training_tokens = total_training_tokens
+                trainer.total_training_steps = total_training_tokens // batch_tokens
+                logger.info(
+                    "Extended resumed training target to "
+                    f"{trainer.cfg.total_training_tokens} tokens / {trainer.total_training_steps} steps"
+                )
 
             logger.info(f"Loaded trainer state from step {trainer.cur_step}")
         else:
