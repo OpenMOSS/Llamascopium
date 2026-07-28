@@ -73,9 +73,10 @@ def test_jumprelu_lp_loss_only_penalizes_dead_features():
 
     with torch.no_grad():
         sae.W_E.zero_()
-        sae.b_E.copy_(torch.tensor([0.1, 0.2, 0.7, 0.8]))
+        sae.b_E.copy_(torch.tensor([0.3, 0.2, 0.7, 0.8]))
         sae.W_D.zero_()
         sae.W_D[:, 0] = 1.0
+        sae.W_D[0, 0] = 2.0
         sae.b_D.zero_()
 
     dead_mask = torch.tensor([True, True, False, False])
@@ -98,11 +99,12 @@ def test_jumprelu_lp_loss_only_penalizes_dead_features():
         return_aux_data=True,
     )
 
-    # Mean dead-feature deficit is ((0.5 - 0.1) + (0.5 - 0.2)) / 2.
-    torch.testing.assert_close(ctx["l_p"], torch.tensor(0.7))
+    # Feature 0 is above threshold in gate space: 0.3 * ||W_D[0]|| = 0.6.
+    # Only feature 1 contributes: 2.0 * (0.5 - 0.2) = 0.6.
+    torch.testing.assert_close(ctx["l_p"], torch.tensor(0.6))
     assert update_calls == 1
 
     ctx["l_p"].backward()
     assert sae.b_E.grad is not None
-    torch.testing.assert_close(sae.b_E.grad, torch.tensor([-1.0, -1.0, 0.0, 0.0]))
+    torch.testing.assert_close(sae.b_E.grad, torch.tensor([0.0, -2.0, 0.0, 0.0]))
     assert sae.activation_function.log_jumprelu_threshold.grad is None

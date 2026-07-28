@@ -568,6 +568,12 @@ class Trainer:
                     "details/l1_coefficient": ctx.get("l1_coefficient"),
                     "details/lp_coefficient": ctx.get("lp_coefficient"),
                     "details/auxk_coefficient": ctx.get("auxk_coefficient"),
+                    "details/n_dead": item(ctx["n_dead"]) if ctx.get("n_dead") is not None else None,
+                    "details/dead_pre_activation_deficit": (
+                        item(ctx["dead_pre_activation_deficit"])
+                        if ctx.get("dead_pre_activation_deficit") is not None
+                        else None
+                    ),
                 }
             )
 

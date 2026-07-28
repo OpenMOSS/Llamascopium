@@ -948,6 +948,8 @@ class SparseDictionary(HookedRootModule, ABC):
                 lp_coefficient > 0.0 and isinstance(self.activation_function, JumpReLU)
             )
             is_dead = None
+            n_dead = None
+            mean_dead_pre_activation_deficit = None
             if needs_dead_statistics:
                 assert update_dead_statistics is not None, (
                     "update_dead_statistics must be set when an auxiliary loss uses dead latents"
@@ -957,6 +959,7 @@ class SparseDictionary(HookedRootModule, ABC):
                     batch.get("mask"),
                     self.specs.feature_acts(feature_acts),
                 )
+                n_dead = is_dead.sum()
 
             # Dead-latent JumpReLU pre-activation loss. Detaching the threshold
             # prevents the auxiliary objective from reviving features by merely
@@ -967,16 +970,25 @@ class SparseDictionary(HookedRootModule, ABC):
                 with timer.time("lp_loss_calculation"):
                     jumprelu_threshold = self.activation_function.get_jumprelu_threshold().detach()
                     dead_mask = is_dead.to(hidden_pre.dtype)
-                    l_p = (
-                        torch.nn.functional.relu(jumprelu_threshold - hidden_pre)
-                        * self.decoder_norm()
-                        * dead_mask
+                    hidden_pre_for_gate = (
+                        hidden_pre * self.decoder_norm()
+                        if self.cfg.sparsity_include_decoder_norm
+                        else hidden_pre
                     )
-                    if isinstance(is_dead, DTensor):
-                        dead_count = int(item(is_dead.full_tensor().sum()))
-                    else:
-                        dead_count = int(item(is_dead.sum()))
-                    l_p = lp_coefficient * l_p.sum(dim=-1) / max(dead_count, 1)
+                    dead_pre_activation_deficit = (
+                        torch.nn.functional.relu(jumprelu_threshold - hidden_pre_for_gate) * dead_mask
+                    )
+                    mean_dead_pre_activation_deficit = dead_pre_activation_deficit.sum(dim=-1) / max(
+                        int(item(n_dead)),
+                        1,
+                    )
+                    mean_dead_pre_activation_deficit, _ = apply_token_mask(
+                        mean_dead_pre_activation_deficit,
+                        self.specs.loss(mean_dead_pre_activation_deficit),
+                        batch.get("mask"),
+                        "mean",
+                    )
+                    l_p = lp_coefficient * dead_pre_activation_deficit.sum(dim=-1)
                     l_p, _ = apply_token_mask(l_p, self.specs.loss(l_p), batch.get("mask"), "mean")
                     loss_dict["l_p"] = l_p
                     loss = loss + l_p
@@ -1044,6 +1056,8 @@ class SparseDictionary(HookedRootModule, ABC):
                 "reconstructed": reconstructed,
                 "hidden_pre": hidden_pre,
                 "is_dead": is_dead,
+                "n_dead": n_dead,
+                "dead_pre_activation_deficit": mean_dead_pre_activation_deficit,
                 "l1_coefficient": l1_coefficient,
                 "lp_coefficient": lp_coefficient,
                 "auxk_coefficient": auxk_coefficient,
