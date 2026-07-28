@@ -765,14 +765,20 @@ class FeatureInterpreter:
             async with semaphore:
                 feature = self.mongo_client.get_feature(sae_name, sae_series, feature_index)
                 try:
+                    analysis = (
+                        next((a for a in feature.analyses if a.name == analysis_name), None)
+                        if feature is not None
+                        else None
+                    )
                     if (
                         feature is not None
+                        and analysis is not None
                         and (
                             self.cfg.overwrite_existing
                             or feature.interpretation is None
                             or feature.interpretation.get("text") is None
                         )
-                        and feature.analyses[0].act_times > 0
+                        and analysis.act_times > 0
                     ):
                         activating_examples, non_activating_examples = self.get_feature_examples(
                             feature=feature,
