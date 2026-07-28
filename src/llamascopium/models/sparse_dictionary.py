@@ -944,13 +944,39 @@ class SparseDictionary(HookedRootModule, ABC):
             else:
                 loss_dict["l_s"] = None
 
-            # Lp loss calculation: λ_P * Σ_i ReLU(exp(t) - f_i(x)) ||W_{d,i}||_2
+            needs_dead_statistics = auxk_coefficient > 0.0 or (
+                lp_coefficient > 0.0 and isinstance(self.activation_function, JumpReLU)
+            )
+            is_dead = None
+            if needs_dead_statistics:
+                assert update_dead_statistics is not None, (
+                    "update_dead_statistics must be set when an auxiliary loss uses dead latents"
+                )
+                is_dead = update_dead_statistics(
+                    feature_acts,
+                    batch.get("mask"),
+                    self.specs.feature_acts(feature_acts),
+                )
+
+            # Dead-latent JumpReLU pre-activation loss. Detaching the threshold
+            # prevents the auxiliary objective from reviving features by merely
+            # lowering their gates.
             if lp_coefficient > 0.0 and isinstance(self.activation_function, JumpReLU):
                 assert isinstance(self, NormComputing), "NormComputing is required for Lp loss computation"
+                assert is_dead is not None
                 with timer.time("lp_loss_calculation"):
-                    jumprelu_threshold = self.activation_function.get_jumprelu_threshold()
-                    l_p = torch.nn.functional.relu(jumprelu_threshold - hidden_pre) * self.decoder_norm()
-                    l_p = lp_coefficient * l_p.sum(dim=-1)
+                    jumprelu_threshold = self.activation_function.get_jumprelu_threshold().detach()
+                    dead_mask = is_dead.to(hidden_pre.dtype)
+                    l_p = (
+                        torch.nn.functional.relu(jumprelu_threshold - hidden_pre)
+                        * self.decoder_norm()
+                        * dead_mask
+                    )
+                    if isinstance(is_dead, DTensor):
+                        dead_count = int(item(is_dead.full_tensor().sum()))
+                    else:
+                        dead_count = int(item(is_dead.sum()))
+                    l_p = lp_coefficient * l_p.sum(dim=-1) / max(dead_count, 1)
                     l_p, _ = apply_token_mask(l_p, self.specs.loss(l_p), batch.get("mask"), "mean")
                     loss_dict["l_p"] = l_p
                     loss = loss + l_p
@@ -959,10 +985,7 @@ class SparseDictionary(HookedRootModule, ABC):
 
             # Add AuxK auxiliary loss if enabled
             if auxk_coefficient > 0.0:
-                assert update_dead_statistics is not None, (
-                    "update_dead_statistics must be set when auxk_coefficient > 0.0"
-                )
-                is_dead = update_dead_statistics(feature_acts, batch.get("mask"), self.specs.feature_acts(feature_acts))
+                assert is_dead is not None
 
                 with timer.time("auxk_loss_calculation"):
                     # Get reconstruction error
@@ -1020,6 +1043,7 @@ class SparseDictionary(HookedRootModule, ABC):
                 "feature_acts": feature_acts,
                 "reconstructed": reconstructed,
                 "hidden_pre": hidden_pre,
+                "is_dead": is_dead,
                 "l1_coefficient": l1_coefficient,
                 "lp_coefficient": lp_coefficient,
                 "auxk_coefficient": auxk_coefficient,

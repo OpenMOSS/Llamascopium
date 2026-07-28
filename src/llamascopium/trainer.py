@@ -56,7 +56,7 @@ class TrainerConfig(BaseConfig):
     l1_coefficient_warmup_steps: int | float = 0.1
     """Steps (int) or fraction of total steps (float) to warm up the sparsity coefficient from 0."""
     lp_coefficient: float | None = None
-    """Coefficient for the Lp sparsity loss. This loss is used to . To use the JumpReLU $L^p$ penalty, set lp_coefficient to a positive value."""
+    """Coefficient for the dead-latent JumpReLU pre-activation auxiliary loss."""
     auxk_coefficient: float | None = None
     """Coefficient for the Aux-K auxiliary loss. This loss is used to revive dead latents during training. To use the Aux-K loss, set auxk_coefficient to a positive value."""
     amp_dtype: Annotated[
@@ -150,7 +150,7 @@ class Trainer:
         self.scheduler: lr_scheduler.LRScheduler | None = None
         self.wandb_logger: Run | None = None
         self.metrics: list[Metric] = []
-        # Dead statistics for auxk loss
+        # Dead statistics shared by AuxK and the JumpReLU pre-activation loss.
         self.tokens_since_last_activation: Tensor | None = None
         self.is_dead: Tensor | None = None
 
@@ -231,6 +231,7 @@ class Trainer:
         sae: SparseDictionary,
         checkpoint_path: str,
         total_training_tokens: int | None = None,
+        config_overrides: TrainerConfig | None = None,
     ) -> "Trainer":
         """
         Load a complete checkpoint including model, optimizer, scheduler, and
@@ -255,6 +256,10 @@ class Trainer:
             # Create trainer instance with loaded config
             trainer = cls(cfg)
             trainer.cfg.from_pretrained_path = checkpoint_path
+            if config_overrides is not None:
+                if config_overrides.lp_coefficient is not None:
+                    trainer.cfg.lp_coefficient = config_overrides.lp_coefficient
+                trainer.cfg.dead_threshold = config_overrides.dead_threshold
 
             # Restore trainer state variables
             trainer.cur_step = trainer_state["cur_step"]
@@ -415,7 +420,7 @@ class Trainer:
         self.scheduler = scheduler
 
     def _initialize_dead_statistics(self, sae: SparseDictionary) -> None:
-        """Initialize the dead statistics tracking variables for auxk loss.
+        """Initialize dead-latent tracking used by auxiliary losses.
 
         Args:
             sae: The sparse autoencoder model to get the d_sae dimension from.
@@ -507,6 +512,7 @@ class Trainer:
         lp_coefficient = self.cfg.lp_coefficient if self.cfg.lp_coefficient is not None else 0.0
 
         auxk_coefficient = self.cfg.auxk_coefficient if self.cfg.auxk_coefficient is not None else 0.0
+        needs_dead_statistics = auxk_coefficient > 0.0 or lp_coefficient > 0.0
 
         ctx = sae.compute_loss(
             batch,
@@ -520,7 +526,7 @@ class Trainer:
             auxk_coefficient=auxk_coefficient,
             frequency_scale=self.cfg.frequency_scale,
             k_aux=self.cfg.k_aux,
-            update_dead_statistics=self.update_dead_statistics if auxk_coefficient > 0.0 else None,
+            update_dead_statistics=self.update_dead_statistics if needs_dead_statistics else None,
         )
         return ctx
 
@@ -603,8 +609,10 @@ class Trainer:
             self._initialize_trainer(sae, activation_stream, wandb_logger)
             self._initialize_optimizer(sae)
 
-        # Initialize dead statistics for auxk loss
-        if self.cfg.auxk_coefficient is not None and self.cfg.auxk_coefficient > 0.0:
+        # Initialize dead statistics when either auxiliary loss needs them.
+        if (self.cfg.auxk_coefficient is not None and self.cfg.auxk_coefficient > 0.0) or (
+            self.cfg.lp_coefficient is not None and self.cfg.lp_coefficient > 0.0
+        ):
             self._initialize_dead_statistics(sae)
 
         assert self.optimizer is not None and self.scheduler is not None, (

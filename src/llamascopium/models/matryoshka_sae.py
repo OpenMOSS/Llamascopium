@@ -294,7 +294,7 @@ class MatryoshkaSparseAutoEncoder(SparseAutoEncoder):
                 lp_coefficient=lp_coefficient,
                 auxk_coefficient=0.0,
                 k_aux=k_aux,
-                update_dead_statistics=None,
+                update_dead_statistics=update_dead_statistics,
                 return_aux_data=True,
                 **kwargs,
             ),
@@ -330,7 +330,9 @@ class MatryoshkaSparseAutoEncoder(SparseAutoEncoder):
 
         if auxk_coefficient > 0.0:
             assert update_dead_statistics is not None, "update_dead_statistics must be set when auxk_coefficient > 0.0"
-            is_dead = update_dead_statistics(feature_acts, mask, self.specs.feature_acts(feature_acts))
+            is_dead = ctx.get("is_dead")
+            if is_dead is None:
+                is_dead = update_dead_statistics(feature_acts, mask, self.specs.feature_acts(feature_acts))
 
             l_aux = self._compute_standard_auxk_loss(
                 label=label_tensor,
