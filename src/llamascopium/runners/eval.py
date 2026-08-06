@@ -77,7 +77,7 @@ def evaluate_sae(settings: EvaluateSAESettings) -> None:
 
     logger.info(f"Device mesh initialized: {device_mesh}")
 
-    activation_factory = ActivationFactory(settings.activation_factory)
+    activation_factory = ActivationFactory(settings.activation_factory, device_mesh=device_mesh)
 
     logger.info("Loading SAE model")
 

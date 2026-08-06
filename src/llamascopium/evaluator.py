@@ -62,18 +62,20 @@ class Evaluator:
 
         proc_bar = tqdm(total=self.cfg.total_eval_tokens)
 
-        for batch in data_stream:
-            batch = sae.normalize_activations(batch)
+        with torch.no_grad():
+            for batch in data_stream:
+                batch = sae.normalize_activations(batch)
 
-            ctx = sae.compute_loss(batch, return_aux_data=True)
+                ctx = sae.compute_loss(batch, return_aux_data=True)
 
-            for metric in metrics:
-                ctx = {**ctx, **metric.update(ctx)}
+                for metric in metrics:
+                    ctx = {**ctx, **metric.update(ctx)}
 
-            total_tokens += batch["tokens"].numel() if batch.get("mask") is None else int(item(batch["mask"].sum()))
-            proc_bar.update(batch["tokens"].numel() if batch.get("mask") is None else int(item(batch["mask"].sum())))
-            if total_tokens >= self.cfg.total_eval_tokens:
-                break
+                batch_tokens = batch["tokens"].numel() if batch.get("mask") is None else int(item(batch["mask"].sum()))
+                total_tokens += batch_tokens
+                proc_bar.update(batch_tokens)
+                if total_tokens >= self.cfg.total_eval_tokens:
+                    break
 
         proc_bar.close()
 

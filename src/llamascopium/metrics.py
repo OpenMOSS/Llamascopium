@@ -280,7 +280,12 @@ class L0Metric(Metric):
         assert self.specs is not None, "Metrics must be updated before computing"
         l0 = self.l0.compute()
         l0 = reduce(l0, self.specs, {"layers": "sum"})[0]
-        return {"metrics/l0": item(l0.mean())}
+        return {
+            "metrics/l0": item(l0.mean()),
+            "metrics/l0_mean": item(l0.mean()),
+            "metrics/l0_min": item(l0.min()),
+            "metrics/l0_max": item(l0.max()),
+        }
 
 
 class L2NormErrorMetric(Metric):
