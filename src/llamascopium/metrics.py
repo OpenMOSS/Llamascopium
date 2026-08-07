@@ -340,10 +340,13 @@ class DownstreamMetric(Metric):
         self.downstream_loss_original: Record[Tensor] = Record()
         self.downstream_loss_reconstructed: Record[Tensor] = Record()
         self.downstream_loss_ablated: Record[Tensor] = Record()
+        self.downstream_loss_delta_reconstructed: Record[Tensor] = Record()
+        self.downstream_loss_delta_ablated: Record[Tensor] = Record()
+        self.downstream_loss_recovered: Record[Tensor] = Record()
         self.downstream_loss_ratio: Record[Tensor] = Record()
 
     def update(self, ctx: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        tokens = ctx["tokens"]
+        tokens = ctx["tokens"].long()
         mask = ctx["mask"]
 
         assert tokens.ndim == 2, "Tokens must be a 2D tensor"
@@ -367,11 +370,24 @@ class DownstreamMetric(Metric):
         x, encoder_kwargs, decoder_kwargs = self.sae.prepare_input(batch)
         reconstructed = self.sae.forward(x, encoder_kwargs=encoder_kwargs, decoder_kwargs=decoder_kwargs)
 
-        reconstructed_batch = batch | {self.sae.cfg.hook_point_out: reconstructed}
-        reconstructed_batch = self.sae.denormalize_activations(reconstructed_batch, scale_factors=scale_factors)
+        reconstructed_batch = self.sae.denormalize_activations(
+            {self.sae.cfg.hook_point_out: reconstructed},
+            scale_factors=scale_factors,
+        )
 
-        def replace_hook_reconstructed(activations: torch.Tensor, hook_point: str) -> torch.Tensor:
-            return torch.where(mask, reconstructed_batch[self.sae.cfg.hook_point_out], activations)
+        def replace_activations(
+            activations: torch.Tensor,
+            replacement: torch.Tensor,
+        ) -> torch.Tensor:
+            if mask is None:
+                return replacement
+            hook_mask = mask.to(device=activations.device, dtype=torch.bool)
+            while hook_mask.ndim < activations.ndim:
+                hook_mask = hook_mask.unsqueeze(-1)
+            return torch.where(hook_mask, replacement, activations)
+
+        def replace_hook_reconstructed(activations: torch.Tensor, hook: object | None = None) -> torch.Tensor:
+            return replace_activations(activations, reconstructed_batch[self.sae.cfg.hook_point_out])
 
         reconstructed_loss: torch.Tensor = self.model.run_with_hooks(
             tokens,
@@ -380,8 +396,8 @@ class DownstreamMetric(Metric):
             loss_per_token=True,
         )
 
-        def replace_hook_ablated(activations: torch.Tensor, hook_point: str) -> torch.Tensor:
-            return torch.where(mask, torch.zeros_like(activations), activations)
+        def replace_hook_ablated(activations: torch.Tensor, hook: object | None = None) -> torch.Tensor:
+            return replace_activations(activations, torch.zeros_like(activations))
 
         ablated_loss: torch.Tensor = self.model.run_with_hooks(
             tokens,
@@ -390,14 +406,37 @@ class DownstreamMetric(Metric):
             loss_per_token=True,
         )
 
-        loss = apply_token_mask(loss, specs, mask, "mean")[0]
-        reconstructed_loss = apply_token_mask(reconstructed_loss, specs, mask, "mean")[0]
-        ablated_loss = apply_token_mask(ablated_loss, specs, mask, "mean")[0]
+        loss_mask = mask
+        if loss_mask is not None and loss.ndim == 2 and loss_mask.ndim == 2:
+            if loss_mask.shape[1] == loss.shape[1] + 1:
+                loss_mask = loss_mask[:, 1:]
+
+        loss = apply_token_mask(loss, specs, loss_mask, "mean")[0]
+        reconstructed_loss = apply_token_mask(reconstructed_loss, specs, loss_mask, "mean")[0]
+        ablated_loss = apply_token_mask(ablated_loss, specs, loss_mask, "mean")[0]
+
+        delta_reconstructed = reconstructed_loss - loss
+        delta_ablated = ablated_loss - loss
+        eps = torch.tensor(1e-8, device=delta_ablated.device, dtype=delta_ablated.dtype)
+        recovered = torch.where(
+            delta_ablated.abs() > eps,
+            (ablated_loss - reconstructed_loss) / delta_ablated,
+            torch.full_like(delta_ablated, float("nan")),
+        )
+        ratio_denominator = ablated_loss - reconstructed_loss
+        ratio = torch.where(
+            ratio_denominator.abs() > eps,
+            delta_ablated / ratio_denominator,
+            torch.full_like(ratio_denominator, float("nan")),
+        )
 
         self.downstream_loss_original.update(loss)
         self.downstream_loss_reconstructed.update(reconstructed_loss)
         self.downstream_loss_ablated.update(ablated_loss)
-        self.downstream_loss_ratio.update((ablated_loss - loss) / (ablated_loss - reconstructed_loss))
+        self.downstream_loss_delta_reconstructed.update(delta_reconstructed)
+        self.downstream_loss_delta_ablated.update(delta_ablated)
+        self.downstream_loss_recovered.update(recovered)
+        self.downstream_loss_ratio.update(ratio)
 
         return {}
 
@@ -406,5 +445,8 @@ class DownstreamMetric(Metric):
             "metrics/downstream_loss_original": item(self.downstream_loss_original.compute()),
             "metrics/downstream_loss_reconstructed": item(self.downstream_loss_reconstructed.compute()),
             "metrics/downstream_loss_ablated": item(self.downstream_loss_ablated.compute()),
+            "metrics/downstream_loss_delta_reconstructed": item(self.downstream_loss_delta_reconstructed.compute()),
+            "metrics/downstream_loss_delta_ablated": item(self.downstream_loss_delta_ablated.compute()),
+            "metrics/downstream_loss_recovered": item(self.downstream_loss_recovered.compute()),
             "metrics/downstream_loss_ratio": item(self.downstream_loss_ratio.compute()),
         }

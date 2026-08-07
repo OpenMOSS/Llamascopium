@@ -228,6 +228,11 @@ def train_sae(settings: TrainSAESettings) -> None:
             save_path=settings.trainer.exp_result_path,
             fold_activation_scale=settings.fold_activation_scale,
         )
+        if settings.trainer.save_full_checkpoint_on_finish:
+            trainer.save_checkpoint(
+                sae=sae,
+                checkpoint_path=settings.trainer.exp_result_path,
+            )
         if is_primary_rank(device_mesh) and mongo_client is not None:
             assert settings.sae_name is not None and settings.sae_series is not None, (
                 "sae_name and sae_series must be provided when saving to MongoDB"
@@ -458,6 +463,11 @@ def train_crosscoder(settings: TrainCrosscoderSettings) -> None:
             save_path=settings.trainer.exp_result_path,
             fold_activation_scale=settings.fold_activation_scale,
         )
+        if settings.trainer.save_full_checkpoint_on_finish:
+            trainer.save_checkpoint(
+                sae=sae,
+                checkpoint_path=settings.trainer.exp_result_path,
+            )
         if is_primary_rank(device_mesh) and mongo_client is not None:
             assert settings.sae_name is not None and settings.sae_series is not None, (
                 "sae_name and sae_series must be provided when saving to MongoDB"
@@ -673,6 +683,11 @@ def train_clt(settings: TrainCLTSettings) -> None:
             save_path=settings.trainer.exp_result_path,
             fold_activation_scale=settings.fold_activation_scale,
         )
+        if settings.trainer.save_full_checkpoint_on_finish:
+            trainer.save_checkpoint(
+                sae=sae,
+                checkpoint_path=settings.trainer.exp_result_path,
+            )
         if is_primary_rank(device_mesh) and mongo_client is not None:
             assert settings.sae_name is not None and settings.sae_series is not None, (
                 "sae_name and sae_series must be provided when saving to MongoDB"
@@ -890,6 +905,11 @@ def train_lorsa(settings: TrainLorsaSettings) -> None:
             save_path=settings.trainer.exp_result_path,
             fold_activation_scale=settings.fold_activation_scale,
         )
+        if settings.trainer.save_full_checkpoint_on_finish:
+            trainer.save_checkpoint(
+                sae=sae,
+                checkpoint_path=settings.trainer.exp_result_path,
+            )
         if is_primary_rank(device_mesh) and mongo_client is not None:
             assert settings.sae_name is not None and settings.sae_series is not None, (
                 "sae_name and sae_series must be provided when saving to MongoDB"
@@ -1106,6 +1126,11 @@ def train_molt(settings: TrainMOLTSettings) -> None:
             save_path=settings.trainer.exp_result_path,
             fold_activation_scale=settings.fold_activation_scale,
         )
+        if settings.trainer.save_full_checkpoint_on_finish:
+            trainer.save_checkpoint(
+                sae=sae,
+                checkpoint_path=settings.trainer.exp_result_path,
+            )
         if is_primary_rank(device_mesh) and mongo_client is not None:
             assert settings.sae_name is not None and settings.sae_series is not None, (
                 "sae_name and sae_series must be provided when saving to MongoDB"

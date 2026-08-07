@@ -7,12 +7,14 @@ import torch
 import wandb
 from pydantic_settings import BaseSettings
 from torch.distributed.device_mesh import init_device_mesh
+from transformer_lens import HookedTransformer
 
 from llamascopium.activation.factory import ActivationFactory, ActivationFactoryConfig
 from llamascopium.backend.language_model import LanguageModelConfig
 from llamascopium.evaluator import EvalConfig, Evaluator
 from llamascopium.models.crosscoder import Crosscoder
 from llamascopium.models.sparse_dictionary import SparseDictionary
+from llamascopium.resource_loaders import load_model
 from llamascopium.trainer import WandbConfig
 from llamascopium.utils.distributed import mesh_rank
 from llamascopium.utils.logging import get_distributed_logger, setup_logging
@@ -92,6 +94,15 @@ def evaluate_sae(settings: EvaluateSAESettings) -> None:
 
     logger.info(f"SAE model loaded: {type(sae).__name__}")
 
+    model = None
+    if settings.model is not None:
+        logger.info("Loading language model for downstream metrics")
+        loaded_model = load_model(settings.model, device_mesh=device_mesh)
+        if not isinstance(loaded_model, HookedTransformer):
+            raise TypeError("Delta LM Loss requires a TransformerLens language model backend.")
+        model = loaded_model
+        logger.info(f"Language model loaded: {type(model).__name__}")
+
     wandb_logger = (
         wandb.init(
             project=settings.wandb.wandb_project,
@@ -111,7 +122,7 @@ def evaluate_sae(settings: EvaluateSAESettings) -> None:
     logger.info("Processing activations for evaluation")
     activations = activation_factory.process()
     evaluator = Evaluator(settings.eval)
-    evaluator.evaluate(sae, activations, wandb_logger)
+    evaluator.evaluate(sae, activations, wandb_logger, model=model)
     logger.info("Evaluation completed")
 
 

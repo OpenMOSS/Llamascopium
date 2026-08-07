@@ -177,6 +177,8 @@ class Trainer:
         else:
             sae.save_checkpoint(checkpoint_dir / "sae_weights.dcp")
 
+        dead_statistics_state = self._dead_statistics_state(sae)
+
         if is_primary_rank(sae.device_mesh):
             # Prepare trainer state
             trainer_state = {
@@ -191,12 +193,18 @@ class Trainer:
                 "checkpoint_thresholds": self.checkpoint_thresholds,
                 "cfg": self.cfg,
             }
+            if sae.device_mesh is None and dead_statistics_state is not None:
+                trainer_state["dead_statistics"] = dead_statistics_state
             # Save trainer state
             trainer_path = checkpoint_dir / "trainer.pt"
             torch.save(trainer_state, trainer_path)
             if self.wandb_logger is not None:
                 with open(checkpoint_dir / "wandb_run_id.json", "w") as f:
                     json.dump({"wandb_run_id": self.wandb_logger.id}, f)
+        if sae.device_mesh is not None and dead_statistics_state is not None:
+            dead_statistics_path = checkpoint_dir / "dead_statistics.dcp"
+            fs_writer = FileSystemWriter(dead_statistics_path)
+            dcp.save(dead_statistics_state, storage_writer=fs_writer)
         # Save optimizer state - handle distributed tensors
         if self.optimizer is not None:
             if sae.device_mesh is None:
@@ -283,6 +291,7 @@ class Trainer:
                     f"{trainer.cfg.total_training_tokens} tokens / {trainer.total_training_steps} steps"
                 )
 
+            trainer._load_dead_statistics(sae, checkpoint_dir, trainer_state)
             logger.info(f"Loaded trainer state from step {trainer.cur_step}")
         else:
             raise ValueError(f"Trainer checkpoint not found at {trainer_path}")
@@ -324,6 +333,54 @@ class Trainer:
 
         logger.info(f"Checkpoint loaded from {checkpoint_path}")
         return trainer
+
+    def _dead_statistics_state(self, sae: SparseDictionary) -> dict[str, Tensor] | None:
+        if self.tokens_since_last_activation is None or self.is_dead is None:
+            return None
+        if sae.device_mesh is None:
+            return {
+                "tokens_since_last_activation": self.tokens_since_last_activation.detach().cpu(),
+                "is_dead": self.is_dead.detach().cpu(),
+            }
+        return {
+            "tokens_since_last_activation": self.tokens_since_last_activation,
+            "is_dead": self.is_dead,
+        }
+
+    def _load_dead_statistics(
+        self,
+        sae: SparseDictionary,
+        checkpoint_dir: Path,
+        trainer_state: dict[str, Any],
+    ) -> None:
+        if sae.device_mesh is None:
+            dead_statistics_state = trainer_state.get("dead_statistics")
+            if dead_statistics_state is None:
+                logger.info("No dead statistics found in checkpoint; they will be initialized on first use")
+                return
+            self.tokens_since_last_activation = dead_statistics_state["tokens_since_last_activation"].to(
+                device=sae.cfg.device, dtype=torch.long
+            )
+            self.is_dead = dead_statistics_state["is_dead"].to(device=sae.cfg.device, dtype=torch.bool)
+            logger.info("Loaded dead statistics from trainer checkpoint")
+            return
+
+        dead_statistics_path = checkpoint_dir / "dead_statistics.dcp"
+        if not dead_statistics_path.exists():
+            logger.info("No distributed dead statistics found in checkpoint; they will be initialized on first use")
+            return
+
+        self._initialize_dead_statistics(sae)
+        assert self.tokens_since_last_activation is not None and self.is_dead is not None
+        dead_statistics_state = {
+            "tokens_since_last_activation": self.tokens_since_last_activation,
+            "is_dead": self.is_dead,
+        }
+        fs_reader = FileSystemReader(str(dead_statistics_path))
+        dcp.load(dead_statistics_state, storage_reader=fs_reader)
+        self.tokens_since_last_activation = dead_statistics_state["tokens_since_last_activation"]
+        self.is_dead = dead_statistics_state["is_dead"]
+        logger.info("Loaded distributed dead statistics from checkpoint")
 
     @timer.time("initialize_trainer")
     def _initialize_trainer(
@@ -619,7 +676,10 @@ class Trainer:
         if (self.cfg.auxk_coefficient is not None and self.cfg.auxk_coefficient > 0.0) or (
             self.cfg.lp_coefficient is not None and self.cfg.lp_coefficient > 0.0
         ):
-            self._initialize_dead_statistics(sae)
+            if self.tokens_since_last_activation is None or self.is_dead is None:
+                self._initialize_dead_statistics(sae)
+            else:
+                logger.info("Using restored dead statistics")
 
         assert self.optimizer is not None and self.scheduler is not None, (
             "Optimizer and scheduler should be already initialized"

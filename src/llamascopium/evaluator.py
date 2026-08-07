@@ -66,7 +66,7 @@ class Evaluator:
             for batch in data_stream:
                 batch = sae.normalize_activations(batch)
 
-                ctx = sae.compute_loss(batch, return_aux_data=True)
+                ctx = {**batch, **sae.compute_loss(batch, return_aux_data=True)}
 
                 for metric in metrics:
                     ctx = {**ctx, **metric.update(ctx)}
