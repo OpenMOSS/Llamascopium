@@ -34,6 +34,7 @@ from llamascopium.metrics import (
     ModelSpecificMetric,
 )
 from llamascopium.models.sparse_dictionary import SparseDictionary
+from llamascopium.models.protocols import NormConstrainable
 from llamascopium.optim import SparseAdam, clip_grad_norm, get_scheduler
 from llamascopium.utils.distributed import is_primary_rank
 from llamascopium.utils.distributed.ops import item
@@ -103,6 +104,8 @@ class TrainerConfig(BaseConfig):
     lr_cool_down_steps: int | float = 0.2
     jumprelu_lr_factor: float = 1.0
     clip_grad_norm: float = 0.0
+    clip_jumprelu_threshold_grad_norm: float = 0.0
+    unit_decoder_norm_after_step: bool = False
     feature_sampling_window: int = 1000
     total_training_tokens: int = 300_000_000
 
@@ -110,6 +113,8 @@ class TrainerConfig(BaseConfig):
     eval_frequency: int = 1000
     n_checkpoints: int = 10
     check_point_save_mode: Literal["log", "linear"] = "log"
+    save_full_checkpoint_on_finish: bool = False
+    """Whether to save a full resumable trainer checkpoint after a normal token-limited finish."""
 
     from_pretrained_path: str | None = None
     exp_result_path: str = "results"
@@ -265,9 +270,24 @@ class Trainer:
             trainer = cls(cfg)
             trainer.cfg.from_pretrained_path = checkpoint_path
             if config_overrides is not None:
-                if config_overrides.lp_coefficient is not None:
-                    trainer.cfg.lp_coefficient = config_overrides.lp_coefficient
-                trainer.cfg.dead_threshold = config_overrides.dead_threshold
+                override_fields = [
+                    "lp_coefficient",
+                    "auxk_coefficient",
+                    "k_aux",
+                    "dead_threshold",
+                    "sparsity_loss_type",
+                    "target_l0",
+                    "l1_coefficient",
+                    "l1_coefficient_warmup_steps",
+                    "jumprelu_lr_factor",
+                    "clip_grad_norm",
+                    "clip_jumprelu_threshold_grad_norm",
+                    "unit_decoder_norm_after_step",
+                    "save_full_checkpoint_on_finish",
+                    "exp_result_path",
+                ]
+                for field in override_fields:
+                    setattr(trainer.cfg, field, getattr(config_overrides, field))
 
             # Restore trainer state variables
             trainer.cur_step = trainer_state["cur_step"]
@@ -631,6 +651,9 @@ class Trainer:
                         if ctx.get("dead_pre_activation_deficit") is not None
                         else None
                     ),
+                    "metrics/jumprelu_threshold_grad_norm_before_clipping": ctx.get(
+                        "jumprelu_threshold_grad_norm_before_clipping"
+                    ),
                 }
             )
 
@@ -746,6 +769,20 @@ class Trainer:
                             ],
                             max_norm=self.cfg.clip_grad_norm if self.cfg.clip_grad_norm > 0 else math.inf,
                         )
+                        threshold_parameters = [
+                            param
+                            for name, param in sae.named_parameters()
+                            if param.grad is not None and "log_jumprelu_threshold" in name
+                        ]
+                        if threshold_parameters:
+                            ctx["jumprelu_threshold_grad_norm_before_clipping"] = clip_grad_norm(
+                                threshold_parameters,
+                                max_norm=(
+                                    self.cfg.clip_jumprelu_threshold_grad_norm
+                                    if self.cfg.clip_jumprelu_threshold_grad_norm > 0
+                                    else math.inf
+                                ),
+                            )
 
                     if not self.cfg.skip_metrics_calculation:
                         with torch.autocast(device_type=sae.cfg.device, dtype=self.cfg.amp_dtype):
@@ -753,6 +790,11 @@ class Trainer:
 
                     with timer.time("optimizer_step"):
                         self.optimizer.step()
+                        if self.cfg.unit_decoder_norm_after_step:
+                            assert isinstance(sae, NormConstrainable), (
+                                "unit_decoder_norm_after_step requires a norm-constrainable sparse dictionary"
+                            )
+                            sae.transform_to_unit_decoder_norm()
                         self.optimizer.zero_grad()
 
                     if eval_fn is not None and (self.cur_step + 1) % self.cfg.eval_frequency == 0:
