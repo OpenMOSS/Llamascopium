@@ -46,7 +46,7 @@ python scripts/shared_file_rpc/local_ssh_bridge.py \
   --ssh-host root@qz-ssh-wstunnel \
   --queue-dir /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs-N/.shared_file_rpc \
   --host 127.0.0.1 \
-  --port 3025
+  --port 3000
 ```
 
 Then verify locally:

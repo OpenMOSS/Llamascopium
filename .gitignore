@@ -34,6 +34,7 @@ actications_tmp/
 20250919_results/
 result*
 MANIFEST
+outputs/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
