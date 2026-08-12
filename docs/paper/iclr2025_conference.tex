@@ -1,0 +1,1157 @@
+\documentclass{article}
+\usepackage{iclr2025_conference,times}
+
+\input{math_commands.tex}
+
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{adjustbox}
+\usepackage{multirow}
+\usepackage{booktabs}
+\usepackage{caption}
+
+\title{Llama Scope 2: Sparse Dictionaries, Replacement Models,\\
+and the Llamascopium Framework}
+
+\author{Llama Scope Team\\
+OpenMOSS\\
+\texttt{TODO: contact email}}
+
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+
+\iclrfinalcopy
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Sparse autoencoders (SAEs) and their variants provide sparse dictionaries for 
+interpreting language model activations in mechanistic interpretability. Furthermore, 
+Transcoders and Low-Rank Sparse Attention (Lorsa) modules provide methods for 
+decomposing MLP and attention computations into interpretable sparse dictionaries.
+We introduce Llama Scope 2, a unified suite of per-layer
+Transcoders and Lorsas modules for the Qwen3,
+Llama 3.2, and Gemma 3 model families. This release fills a practical gap in
+current circuit-analysis infrastructure, where popular open language models
+lack complete and consistent sparse dictionaries for both MLP and attention
+computations. We evaluate these dictionaries in terms of reconstruction
+quality, faithfulness, generalization, and scalability, and use case studies to
+show how they can be composed into replacement models for complete circuit
+analysis. The checkpoints for the Llama Scope 2 Sparse Dictionary Families are
+publicly available at \todo{checkpoint URL}, and the training, analysis, and
+visualization framework is released at \todo{code URL}. Together, these
+resources provide an open foundation for broad circuit-level analysis and model
+biology studies of modern language models.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Sparse autoencoders (SAEs) learn sparse and overcomplete dictionaries in which a model
+activation is represented by a small number of active features \citep{bricken2023monosemanticity, cunningham2023sae}. 
+These features provide a potentially interpretable decomposition of the information represented within language models 
+and have become foundational tools for research on language model interpretability 
+\citep{he2024llamascope, lieberum2024gemma, deng2026qwenscope}.
+
+Furthermore, Transcoders decompose MLP computations, enabling preliminary circuit analysis through 
+MLP layers \citep{dunefsky2024transcoder}. 
+Low-Rank Sparse Attention (Lorsa) modules extend this sparse decomposition to attention modules, 
+providing interpretable sparse dictionaries for token-level interactions within attention \citep{he2025lorsa}.
+Together, these dictionaries enable a sparse decomposition , 
+and support circuit  analysis across complete Transformers and provide an interpretable 
+view of token-level feature interactions \citep{shu2026completereplacement}.
+
+The original Llama Scope release scaled this approach to every
+layer and sublayer of Llama-3.1-8B and provided a large collection of
+ready-to-use TopK SAEs \citep{he2024llamascope}. This reduced the cost of
+retraining dictionaries and made it easier to compare sparse features across
+layers, sites, and dictionary widths.
+
+Llama Scope 2 brings these components together in a unified release spanning Qwen3, Llama 3.2, and 
+Gemma 3 \citep{deng2026qwenscope, mcdougall2025gemmascope2}. We use TopK training for the Qwen3 and Llama 3.2 families, 
+and JumpReLU training for Gemma 3 Lorsas following the recipe adopted by Gemma Scope 2 \citep{mcdougall2025gemmascope2}. 
+The release is accompanied by the new version of Llamascopium, a distributed framework that unifies the complete sparse 
+interpretability workflow, including activation generation, sparse dictionary training, feature analysis, visualization, and circuit analysis.
+
+To make circuit analysis more flexible and customizable, we further train
+Matryoshka SAEs \citep{bussmann2025matryoshka} on the last residual stream in the circuit-tracing pipeline.
+The resulting hierarchical features allow users to select a residual-feature range of interest while suppressing 
+irrelevant graph components, providing a way to address \emph{Uninterested Circuits} \citep{shu2026completereplacement}.
+
+In section~\ref{sec:background}, we introduce the components of Llama Scope 2: Transcoders, and Low-Rank Sparse Attention (Lorsa).
+% In section~\ref{sec:llamascopium}, we introduce the Llamascopium framework, which provides a unified interface for training, analyzing, and visualizing the sparse dictionaries.
+% In section~\ref{sec:release}, we introduce the Llama Scope 2 release, which includes the sparse dictionaries for Qwen3, Llama 3.2, and Gemma 3.
+In section~\ref{sec:training}, we introduce the training procedure for the sparse dictionaries.
+In section~\ref{sec:evaluation}, we evaluate the performance of the sparse dictionaries.
+In section~\ref{sec:attribution_graph_construction}, we construct the attribution graph for the sparse dictionaries.
+In section~\ref{sec:case_studies}, we demonstrate the use of the sparse dictionaries for case studies.
+In section~\ref{sec:attribution_graph_evaluation}, we evaluate the quality of the attribution graph.
+
+
+\paragraph{Contributions.}
+This technical report documents the following components of Llama Scope 2:
+\begin{itemize}
+    \item \textbf{A multi-family sparse dictionary suite.}
+    We train layer-wise transcoders and Lorsas for Llama 3.2 1B and 3B, Qwen3 1.7B and
+    8B, and Gemma 3 270M, 1B, and 4B.
+
+    \item \textbf{Replacement models for circuit analysis.}
+    These components can be composed into sparse replacement models that expose
+    feature-to-feature computational pathways while retaining explicit
+    reconstruction-error terms.
+
+    \item \textbf{Matryoshka SAE for uninterested circuits.}
+    We train Matryoshka SAEs on the last residual stream to define hierarchical
+    residual features, enabling \emph{Uninterested Circuits} that prune circuit
+    graphs by selecting a desired feature range.
+
+    \item \textbf{The Llamascopium framework.}
+    We provide a unified, distributed codebase for activation generation,
+    sparse-dictionary training, feature analysis, visualization, and circuit
+    attribution.
+\end{itemize}
+
+\section{Sparse Dictionary Background}
+\label{sec:background}
+
+\subsection{Vanilla Sparse Autoencoders}
+\label{sec:vanilla_sae}
+
+Given a model activation $\vx \in \mathbb{R}^{d_{\mathrm{model}}}$, a sparse
+autoencoder encodes and reconstructs it as
+\begin{equation}
+\begin{aligned}
+    \vh &= \mW_E \vx + \vb_E, \qquad
+    \vz = \sigma(\vh), \\
+    \widehat{\vx} &= \mW_D \vz + \vb_D.
+\end{aligned}
+\end{equation}
+Here, $\vh$ denotes the encoder pre-activations and $\vz$ the sparse feature
+activations. The columns of $\mW_D$ form an overcomplete dictionary of feature
+directions, while the nonzero entries of $\vz$ specify how these directions are
+linearly combined to reconstruct $\vx$ (up to the decoder bias $\vb_D$).
+Llama Scope 2 primarily uses two activation functions: TopK, which directly controls the 
+number of active latents per token, and JumpReLU, which learns a separate activation threshold 
+for each latent \citep{gao2024topk, rajamanoharan2024jumprelu}.
+
+\subsection{Per-layer Transcoders}
+\label{sec:per_layer_transcoder}
+
+Per-layer transcoders have the same encoder--decoder structure as sparse autoencoders, 
+but differ in their training objective \citep{dunefsky2024transcoder}. Rather than reconstructing a representation from itself, 
+a transcoder takes the normalized input to an MLP sublayer and predicts the corresponding MLP output. 
+In this sense, transcoders provide a sparse decomposition of the MLP computation, 
+rather than of a single representation.
+
+For each layer $\ell$, the transcoder maps the normalized MLP input
+$\vx_{\mathrm{MLP,in}}$ to the corresponding MLP output
+$\vx_{\mathrm{MLP,out}}$ as
+\begin{equation}
+    \begin{gathered}
+        \vh = \mW_E \vx_{\mathrm{MLP,in}} + \vb_E,
+        \qquad
+        \vz = \sigma(\vh), \\
+        \widehat{\vx}_{\mathrm{MLP,out}}
+        = \mW_D \vz + \vb_D.
+    \end{gathered}
+\end{equation}
+
+
+\subsection{Low-rank Sparse Attention (Lorsa)}
+\label{sec:lorsa}
+
+Lorsa can be viewed as a transcoder-style decomposition of attention layers \citep{he2025lorsa}. 
+It represents attention as a sparse dictionary of rank-1 features, where the OV 
+weights serve as the decoder and decoder, while the QK pattern determines feature activation and 
+represents the interactions across token positions.
+
+For an attention input
+$\vx_{\mathrm{Attn,in}} \in \mathbb{R}^{n \times d_{\mathrm{model}}}$,
+each Lorsa feature $k$ first computes its attention pattern as
+\begin{equation}
+\begin{gathered}
+    \mA_k =
+    \operatorname{softmax}\!\left(
+    \frac{
+        (\vx_{\mathrm{Attn,in}}\mW_{Q,k})
+        (\vx_{\mathrm{Attn,in}}\mW_{K,k})^\top
+    }{\sqrt{d_h}}
+    + \mB
+    \right), \\[4pt]
+    h_{i,k}
+    =
+    \sum_{j=1}^{n}
+    A_{k,i,j}\,
+    \vw_{V,k}^{\top}
+    \vx_{\mathrm{Attn,in},j}.
+\end{gathered}
+\end{equation}
+
+The sparse feature activation is obtained by applying the activation function
+\begin{equation}
+    z_{i,k} = \sigma(h_{i,k}).
+\end{equation}
+
+Finally, the active features are decoded into the attention output as
+\begin{equation}
+    \widehat{\vx}_{\mathrm{Attn,out},i}
+    =
+    \sum_k z_{i,k}\vw_{O,k}
+    + \vb_O.
+\end{equation}
+Here, $\vz_i \in \mathbb{R}^{n \times 1}$ denotes the scalar activation of feature $i$ across token positions, 
+and $\vw_{O,i}$ specifies its output direction. In this sense, Lorsa provides a sparse decomposition of the 
+attention computation.
+
+\subsection{Matryoshka Sparse Autoencoders}
+\label{sec:matryoshka_sae}
+
+Matryoshka Sparse Autoencoders (Matryoshka SAEs) extend standard SAEs by
+organizing the latent space into a sequence of nested prefixes
+\citep{bussmann2025matryoshka}. Each prefix is trained to reconstruct the same
+activation, encouraging earlier features to capture more general structure and
+later features to provide progressively finer-grained representations.
+
+Given an activation $\vx$, the encoder is the same as in a standard SAE,
+\begin{equation}
+\begin{gathered}
+    \vh = \mW_E \vx + \vb_E,
+    \qquad
+    \vz = \sigma(\vh),
+\end{gathered}
+\end{equation}
+while different prefixes $\vz^{(m)}$ of the latent vector are decoded independently,
+\begin{equation}
+    \widehat{\vx}^{(m)}
+    =
+    \mW_D \vz^{(m)} + \vb_D,
+    \qquad m \in \mathcal{M},
+\end{equation}
+
+where $\mathcal{M}$ denotes the set of predefined prefix widths used to form the nested latent representations.
+We train Matryoshka SAEs on the final residual stream of the model, 
+immediately before the unembedding layer. We find that they can organize concepts into hierarchical levels, 
+for example, from ``person name'' to ``female name'' and finally to a specific name such as ``Mary.'' 
+This hierarchy allows circuit tracing to selectively identify circuits at different levels of abstraction.
+
+\section{Training Llama Scope 2}
+\label{sec:training}
+
+\subsection{Release Overview}
+
+Table~\ref{tab:release} summarizes the planned organization of the release.
+The table records the configurations currently represented by the main
+training workflows. The final public-checkpoint count and any additional SAE
+or Matryoshka variants will be added after the final checkpoint audit.
+
+\begin{table*}[t]
+    \caption{
+        Core Llama Scope 2 training configurations. TopK values are per token.
+        For JumpReLU Lorsas, $L_0^\star$ is layer-dependent; arrows denote the
+        target-$L_0$ schedules from early to deeper layers.
+        Each listed configuration is trained layer-wise.
+        }
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lrrllll}
+        \toprule
+        Backbone & Layers & $d_{\mathrm{model}}$ & Dictionary & Width &
+        Activation / sparsity & Training tokens \\
+        \midrule
+
+        Llama 3.2 1B & 16 & 2048 & TC, Lorsa & $8\times$, $32\times$ &
+        TopK, $K\in\{64,128,256\}$ & 8B \\
+
+        Llama 3.2 3B & 28 & 3072 & TC, Lorsa & $8\times$, $32\times$ &
+        TopK, $K\in\{64,128,256\}$ & 8B \\
+
+        \midrule
+
+        Qwen3 1.7B & 28 & 2048 & TC, Lorsa & $8\times$, $32\times$ &
+        TopK, $K\in\{64,128,256\}$ & 8B \\
+
+        Qwen3 8B & 36 & 4096 & TC, Lorsa & $8\times$, $32\times$ &
+        TopK, $K=256$ & 8B \\
+
+        \midrule
+
+        Gemma 3 270M & 18 & 640 & Lorsa & 16,384 &
+        JReLU, $L_0^\star: 10\!\rightarrow\!20,\; 60\!\rightarrow\!120$ & 8B \\
+        
+        Gemma 3 1B & 26 & 1152 & Lorsa & 16,384 &
+        JReLU, $L_0^\star: 10\!\rightarrow\!20,\; 60\!\rightarrow\!120$ & 8B \\
+        
+        Gemma 3 4B & 34 & 2560 & Lorsa & 16,384 &
+        JReLU, $L_0^\star: 10\!\rightarrow\!20,\; 60\!\rightarrow\!120$ & 8B \\
+
+        \bottomrule
+    \end{tabular}
+    }
+\end{table*}
+
+\begin{table*}[t]
+    \caption{
+        Lorsa attention configurations used in our workflow scripts.
+        \texttt{n\_qk\_heads} is the number of Lorsa query--key heads,
+        and $H_{\mathrm{OV}}$ is the number of sparse output-value heads.
+        Braced pairs list the values for $8\times$ and $32\times$ dictionaries.
+        }
+    \centering
+    \small
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lrrrrlll}
+        \toprule
+        Backbone & Width & \texttt{n\_qk\_heads} & $H_{\mathrm{OV}}$ &
+        $d_{\mathrm{QK}}$ & RoPE & Attention & Post-QK norm \\
+        \midrule
+        Llama 3.2 1B & $8\times,32\times$ & $256,1024$ &
+        $16{,}384,65{,}536$ & 64 &
+        $\theta=5{\times}10^5$, NTK-by-parts & global & none \\
+        Llama 3.2 3B & $8\times,32\times$ & $192,768$ &
+        $24{,}576,98{,}304$ & 128 &
+        $\theta=5{\times}10^5$, NTK-by-parts & global & none \\
+        \midrule
+        Qwen3 1.7B & $8\times,32\times$ & $128,512$ &
+        $16{,}384,65{,}536$ & 128 &
+        $\theta=10^6$ & global & RMS \\
+        Qwen3 8B & $8\times,32\times$ & $256,1024$ &
+        $32{,}768,131{,}072$ & 128 &
+        $\theta=10^6$ & global & RMS \\
+        \midrule
+        Gemma 3 270M & 16,384 & 64 & 16,384 & 256 &
+        $\theta=10^6$ / local $10^4$ & local/global, $w=512$ & RMS \\
+        Gemma 3 1B & 16,384 & 64 & 16,384 & 256 &
+        $\theta=10^6$ / local $10^4$ & local/global, $w=512$ & RMS \\
+        Gemma 3 4B & 16,384 & 64 & 16,384 & 256 &
+        $\theta=10^6$ / local $10^4$ & local/global, $w=1024$ & RMS \\
+        \bottomrule
+    \end{tabular}
+    }
+    \label{tab:lorsa-head-configs}
+\end{table*}
+
+All Lorsa modules with \texttt{initialize\_lorsa\_with\_mhsa} enabled initialize
+their QK projections from the corresponding pretrained attention layer. For GQA
+backbones, the key projections are expanded from key-value heads to query-head
+slots before this copy, so repeated Lorsa K heads share the same initial value
+whenever the base model shares a key head. These heads are not tied during
+optimization; the shared-K structure is an initialization prior rather than a
+hard parameter-sharing constraint.
+
+\subsection{Model Overview}
+
+\subsubsection{Qwen3 Models}
+
+We train per-layer Transcoders and Lorsas for Qwen3-1.7B and Qwen3-8B
+\citep{yang2025qwen3}. Both Qwen3 variants use global causal grouped-query
+attention (GQA)~\citep{joshua2023gqa} with rotary position embeddings and
+per-head QK RMS normalization. We match these details in Lorsa by using the
+native QK geometry: Qwen3-1.7B has 16 query heads and Qwen3-8B has 32 query
+heads, both with 8 key-value heads, 128-dimensional QK heads, RoPE base $10^6$,
+and post-QK RMS normalization. The number of Lorsa QK heads is scaled by the
+dictionary expansion factor. Both releases use TopK activation with $8\times$
+and $32\times$ dictionary expansion factors. The 1.7B suite includes
+$K\in\{64,128,256\}$, while the 8B suite uses $K=256$.
+
+\subsubsection{Llama 3.2 Models}
+
+For Llama 3.2 1B and 3B~\citep{grattafiori2024llama}, we train per-layer
+Transcoders and Lorsas across all Transformer layers. Llama 3.2 uses global
+causal GQA with rotary position embeddings and Llama-3 long-context rotary
+scaling, but does not use QK normalization or local sliding-window attention. We
+therefore instantiate Lorsa with the native query-head counts and head
+dimensions---32 heads of dimension 64 for the 1B model and 24 heads of
+dimension 128 for the 3B model, with 8 key-value heads in both base models---and
+disable post-QK normalization. Both model sizes use $8\times$ and $32\times$
+dictionaries with $K\in\{64,128,256\}$.
+
+\subsubsection{Gemma 3 Models}
+
+For Gemma 3 270M, 1B, and 4B, we train per-layer Lorsa modules with 16,384
+sparse OV features. We use JumpReLU activations and layer-dependent sparsity
+targets following Gemma Scope 2~\citep{mcdougall2025gemmascope2}.
+
+Because Gemma uses QK normalization, grouped-query attention, and interleaved
+local/global attention~\citep{team2025gemma, joshua2023gqa}, we adapt Lorsa to
+match these architectural details, including the corresponding QK head
+structure, local attention configuration, and QK normalization. We initialize the 
+Lorsa QK parameters from the pretrained Gemma attention weights described above
+\citep{wang2026dimensional}, while sharing key projections according to Gemma's GQA structure.
+
+\paragraph{Architecture adaptation for Gemma.}
+Gemma attention differs from standard multi-head self-attention in several
+important ways: it uses QK normalization, grouped-query attention (GQA), and an
+interleaved pattern of local sliding-window and global attention layers, with
+different rotary settings across these attention types. We adapt Lorsa to match
+these architectural details \citep{team2025gemma, joshua2023gqa}. In
+particular, we apply Gemma's QK normalization inside the Lorsa attention
+computation, use the appropriate local window and rotary configuration for each
+layer, and align the QK head structure with Gemma's GQA layout while keeping
+16,384 sparse OV features. The pretrained-attention initialization gives the
+sparse decomposition an architecture-matched starting point
+\citep{wang2026dimensional}.
+
+
+
+\subsection{Activation Data}
+For sweeping, training, and analysis (visualization), we use datasets drawn 
+from the same distribution to generate activations at the corresponding hook points. 
+Llama 3.2 and the Gemma 3 models use 2,048-token  contexts from FineWeb-Edu \citep{penedo2024fineweb}. 
+Qwen3 uses 2,048-token contexts from an internal uncropped code--English--Chinese pretraining corpus. 
+During training, we apply dataset-wise activation normalization using a fixed scale estimated from the 
+training distribution. This brings activations to a stable average norm and improves the numerical scale 
+of parameter optimization, while preserving relative token-level magnitudes. After training, we fold the
+normalization scale into the learned parameters, allowing the sparse dictionaries to operate directly on 
+activations in their original scale at inference time. Cached activations are stored in bfloat16 precision to 
+reduce storage and memory overhead. During training, we use mixed precision with bfloat16 autocast
+for the forward and loss computation, while sparse-dictionary parameters are stored in float32 unless otherwise 
+specified.
+
+\subsection{Training Details}
+
+For the Qwen3 and Llama 3.2 model families, we train TopK Transcoders and
+Lorsas. For the Gemma 3 family, Gemma Scope 2 already provides JumpReLU SAEs
+and Transcoders; we therefore train only the complementary Lorsas. Below we describe 
+the training objectives, initialization and optimization details for the TopK 
+Transcoders and Lorsas.
+
+\subsubsection{TopK Transcoders and Lorsas}
+\label{sec:topk_transcoder_lorsa}
+
+\paragraph{Objectives} For TopK Transcoders and Lorsas, sparsity is enforced directly by
+retaining the $K$ largest positive pre-activations:
+\begin{equation}
+    \vz
+    =
+    \operatorname{TopK}\!\left(
+        \operatorname{ReLU}(\vh), K
+    \right).
+\end{equation}
+The model is therefore trained using only the reconstruction objective,
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{rec}}
+    =
+    \mathbb{E}\!\left[
+        \left\|
+        \vx-\widehat{\vx}
+        \right\|_2^2
+    \right],
+\end{equation}
+without additional sparsity penalties.
+
+\paragraph{Initialization}
+For TopK Transcoders and Lorsas, we initialize the decoder and encoder weights
+from uniform distributions with scale $1/\sqrt{d_{\mathrm{model}}}$ and
+$1/\sqrt{d_{\mathrm{model}}m}$, respectively, where $m$ is the dictionary
+expansion factor. We do not initialize the encoder as the decoder transpose.
+Instead, after sampling the weights, we perform a coarse-to-fine grid search
+over the decoder norm on an activation batch and choose the norm that
+minimizes the initial reconstruction loss \citep{gao2024topk}. We initialize the decoder bias from
+the empirical center of the normalized target activations and initialize the
+encoder bias from the mean pre-activation. For Transcoders, we additionally
+initialize from the corresponding pretrained MLP layer. For Lorsas, we
+initialize the QK parameters from the corresponding pretrained attention layer
+and initialize the OV decoder directions within the active subspace of the
+training activations \citep{wang2026dimensional}.
+
+\paragraph{Optimization}
+For all TopK Transcoders and Lorsas, the initial TopK value is equal to the
+final target $K$. Transcoders use SparseAdam, while Lorsas use Adam;
+both use $(\beta_1,\beta_2)=(0.9,0.999)$ and no weight decay. We use 5,000 warmup
+steps followed by a linear cooldown over the final 20\% of training, with no
+gradient clipping.
+
+TopK Transcoders use a batch size of 32,768 tokens. TopK Lorsa batch sizes are
+32,768 for Qwen3 and $8\times$ Llama, and 16,384 for $32\times$ Llama. Learning
+rates and other hyperparameters are summarized in
+Appendix~\ref{app:topk_hyperparameters}.
+
+
+\subsubsection{JumpReLU Lorsa}
+\label{sec:jumprelu_lorsa}
+
+Gemma Scope 2 provides a comprehensive suite of JumpReLU SAEs and Transcoders
+for Gemma 3. Following this design, we use JumpReLU activations when training
+Lorsas for the Gemma 3 models.
+
+\paragraph{Objectives.}
+The reconstruction objective is
+\begin{equation}
+    \mathcal{L}_{\mathrm{rec}}
+    =
+    \mathbb{E}\!\left[
+        \left\|
+        \vx-\widehat{\vx}
+        \right\|_2^2
+    \right].
+\end{equation}
+We encourage a target sparsity level $L_0^{*}$ using
+\begin{equation}
+    \mathcal{L}_{\mathrm{sparse}}
+    =
+    \lambda
+    \frac{2}{L_0^{*}}
+    \left(
+        L_0-L_0^{*}
+    \right)^2 ,
+\end{equation}
+where $\lambda$ is the sparsity coefficient
+\citep{mcdougall2025gemmascope2}.
+
+To mitigate dead features, we additionally use an auxiliary loss
+\citep{rajamanoharan2024jumprelu},
+\begin{equation}
+    \mathcal{L}_{\mathrm{aux}}
+    =
+    \lambda_{\mathrm{aux}}
+    \mathbb{E}\!\left[
+        \sum_{i \in \mathcal{D}}
+        \max\!\left(0, \tau_i - \tilde{z}_i\right)
+    \right],
+\end{equation}
+where $\mathcal{D}$ denotes the set of dead latents, $\tau_i$ is the detached
+JumpReLU threshold, $\tilde{z}_i$ is the corresponding pre-activation, and
+$\lambda_{\mathrm{aux}}$ controls the auxiliary loss strength.
+
+The final training objective is
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\mathrm{rec}}
+    +
+    \mathcal{L}_{\mathrm{sparse}}
+    +
+    \mathcal{L}_{\mathrm{aux}} .
+\end{equation}
+
+\paragraph{Initialization.}
+Gemma Lorsas are initialized from the original multi-head self attention
+layers. We copy the query projections directly and initialize the key
+projections according to Gemma's GQA structure, so heads sharing a pretrained
+key-value head start from the same key projection. The repeated key heads are
+then trained independently. We also initialize the OV decoder directions from
+the active subspace of the training attention outputs as describe in TopK Lorsa.
+
+\paragraph{Optimization.}
+Gemma Lorsas are trained with Adam. We use 5,000 warmup steps and linearly decay 
+the learning rate over the final 20\% of training to $1/32$ of its peak value. 
+To avoid the excessive number of dead features, we linearly warm up the $\ell_1$ 
+coefficient over the first 6\% of training, corresponding to 480M tokens for the 8B model, 
+and use an auxiliary loss to further improve dictionary utilization.
+
+For JumpReLU, we use a separate learning rate for the learnable thresholds: $0.1$ for 
+settings with $L_0 \in [10, 20]$ and $0.3$ for settings with $L_0 \in [100, 200]$. 
+We additionally apply global gradient clipping at $1.0$ to stabilize threshold optimization 
+and set the $L_p$ coefficient to $0.003$.
+
+The token batch sizes are 16,384, 32,768, and 131,072 for Gemma 3 270M, 1B,
+and 4B, respectively. Learning rates and other hyperparameters are summarized in
+Appendix~\ref{app:lorsa-hyperparameters}.
+
+\section{Sparse Decomposition Evaluation}
+\label{sec:evaluation}
+
+\subsection{Evaluation Setup and Metrics}
+
+We evaluate the learned sparse decompositions along four dimensions:
+dictionary quality, scaling behavior, model-level fidelity, and feature
+interpretability.
+
+\paragraph{Dictionary quality.}
+We report explained variance (EV), $L_0$, latent density, firing frequency,
+and the number of dead latents to characterize reconstruction quality and
+feature utilization.
+
+\paragraph{Scaling behavior.}
+We evaluate how reconstruction quality changes as the dictionary width and
+TopK sparsity level $K$ increase, focusing primarily on the scaling of EV.
+
+\paragraph{Model-level fidelity.}
+We insert the trained Transcoders and Lorsas into the model and compare the
+replacement model against the original model using output KL divergence and
+the change in language-modeling loss,
+$\Delta\mathcal{L}_{\mathrm{LM}}$.
+
+\paragraph{Feature interpretability.}
+We automatically generate and evaluate feature explanations following prior
+automated interpretability protocols
+\citep{cunningham2024circuits, karvonen2025saebench}, and report the
+corresponding automated interpretability scores.
+
+\paragraph{Feature steering.}
+We evaluate the controllability of sparse features through activation 
+steering~\citep{rimsky2024steering}. Specifically, we consider two steering tasks: 
+(i) text-style transfer, following Qwen-Scope~\citep{deng2026qwenscope}, 
+and (ii) personality steering, where we amplify personality-related features 
+to induce corresponding behavioral traits~\citep{chen2025persona}.
+
+\subsection{Sparse Dictionary Quality}
+
+We first evaluate the reconstruction--sparsity trade-off of the trained
+Transcoders and Lorsas across model families and layers. We report EV and
+$L_0$, together with firing-frequency, latent-density, and dead-latent
+statistics.
+
+% TODO: Main EV--L0 results across models and layers.
+% TODO: Firing-frequency and dead-latent distributions.
+
+
+\subsection{Scaling Behavior}
+
+We next study how sparse decomposition quality scales with dictionary capacity.
+For TopK models, we vary both the dictionary expansion factor and $K$ and
+measure the corresponding change in EV. This allows us to examine whether
+larger dictionaries and denser operating points consistently improve
+reconstruction across model families.
+
+% TODO: EV versus width.
+% TODO: EV versus TopK K.
+% TODO: Compare scaling trends across Llama 3.2 and Qwen3.
+
+
+\subsection{Replacement Fidelity}
+
+Reconstruction quality alone does not guarantee that a sparse module faithfully
+preserves the original model computation. We therefore replace the original
+MLP and attention modules with the corresponding Transcoders and Lorsas and
+measure the resulting change in model behavior. We report output KL divergence
+and $\Delta\mathcal{L}_{\mathrm{LM}}$, with lower values indicating higher
+replacement fidelity.
+
+% TODO: Per-layer replacement results.
+% TODO: End-to-end replacement with progressively more layers replaced.
+% TODO: KL divergence and delta LM loss.
+
+
+\subsection{Feature Interpretability}
+
+Finally, we evaluate whether the learned sparse features admit meaningful
+natural-language descriptions. We apply automated feature interpretation to
+Transcoder and Lorsa features and evaluate the generated explanations using
+automated interpretability scores
+\citep{cunningham2024circuits, karvonen2025saebench}.
+
+% TODO: Aggregate automated interpretability scores.
+% TODO: Representative Transcoder and Lorsa feature examples.
+
+
+
+\section{Attribution Graph Construction}
+\label{sec:attribution_graph_construction}
+
+We use a per-layer Transcoder to sparsify each MLP sublayer and a Lorsa to
+sparsify each attention sublayer. We additionally place a Matryoshka SAE on the
+final residual stream as an abstraction-selection interface for graph
+construction. Together, these modules provide a sparse replacement of the full
+Transformer computation, over which we construct attribution graphs following
+circuit tracing~\citep{ameisen2025circuit, shu2026completereplacement}.
+
+Following~\citet{shu2026completereplacement}, we define an attribution graph as
+\begin{equation}
+    \mathcal{G}
+    =
+    (\mathcal{V}, \mathcal{E}, \mathcal{A}),
+    \label{eq:attribution_graph}
+\end{equation}
+where the node set consists of
+\begin{equation}
+    \mathcal{V}
+    =
+    \mathcal{V}_{\mathrm{embed}}
+    \cup
+    \mathcal{V}_{\mathrm{transcoder}}
+    \cup
+    \mathcal{V}_{\mathrm{lorsa}}
+    \cup
+    \mathcal{V}_{\mathrm{matryoshka}}
+    \cup
+    \mathcal{V}_{\mathrm{error}}
+    \cup
+    \mathcal{V}_{\mathrm{logit}} .
+    \label{eq:attribution_graph_nodes}
+\end{equation}
+
+For a source node $s$ and a downstream target node $t$, their effective
+encoder and decoder directions depend on the node type:
+\begin{equation}
+\begin{gathered}
+\vw_{\mathrm{enc},t}
+=
+\begin{cases}
+    \vw_{\mathrm{enc},t},
+        & t \text{ is a Transcoder or Matryoshka feature}, \\
+    \vw_{V,t},
+        & t \text{ is a Lorsa feature}, \\
+    \vw_{\mathrm{unembed},t},
+        & t \text{ is a logit},
+\end{cases}
+\\[6pt]
+\vw_{\mathrm{dec},s}
+=
+\begin{cases}
+    \vw_{\mathrm{dec},s},
+        & s \text{ is a Transcoder or Matryoshka feature}, \\
+    \vw_{O,s},
+        & s \text{ is a Lorsa feature}, \\
+    \vw_{\mathrm{embed},s},
+        & s \text{ is a token embedding}, \\
+    \epsilon_s,
+        & s \text{ is an error node}.
+\end{cases}
+\end{gathered}
+\label{eq:effective_enc_dec}
+\end{equation}
+
+The direct attribution from $s$ to $t$ is
+\begin{equation}
+    \alpha_{s \rightarrow t}
+    =
+    a_s\,
+    P^{t}_{i,j}\,
+    \vw_{\mathrm{dec},s}^{\top}
+    \vw_{\mathrm{enc},t},
+    \label{eq:direct_attribution_score}
+\end{equation}
+where $a_s$ is the source activation and $P^{t}_{i,j}$ captures the
+token-to-token interaction associated with the target computation, with
+$P^{t}=I$ for non-attention components.
+
+Starting from a target logit, we recursively trace high-attribution edges
+backward through the sparse replacement model to obtain the attribution graph.
+In practice, we compute these scores using gradients while detaching attention
+patterns and LayerNorm denominators, following~\citet{ameisen2025circuit}.
+
+\subsection{Matryoshka SAEs for Uninterested Circuits}
+\label{sec:matryoshka_uninterested_circuits}
+
+Full attribution graphs often contain pathways that are faithful to the target
+computation but irrelevant to the analyst's question. We refer to these
+components as \emph{uninterested circuits}. Llama Scope 2 addresses this problem
+by using a Matryoshka SAE on the final residual stream to choose the abstraction
+level before attribution is traced.
+
+Let the Matryoshka widths be
+$0=b_0<b_1<\cdots<b_M=d_{\mathrm{SAE}}$. For a residual activation
+$\vx_i$ at token position $i$, the Matryoshka SAE produces latent activations
+$\vz_i\in\mathbb{R}^{d_{\mathrm{SAE}}}$. During circuit construction, the user
+selects a feature range $R=[b_a,b_b)$ whose endpoints are Matryoshka
+boundaries. We expose only features in this range by applying the mask
+\begin{equation}
+    z^{(R)}_{i,k}
+    =
+    z_{i,k}\,\mathbf{1}\{k\in R\},
+    \label{eq:matryoshka_range_mask}
+\end{equation}
+and use the corresponding residual reconstruction
+\begin{equation}
+    \widehat{\vx}^{(R)}_i
+    =
+    \vb_D
+    +
+    \sum_{k\in R} z_{i,k}\vw_{D,k},
+    \qquad
+    \epsilon^{(R)}_i
+    =
+    \vx_i-\widehat{\vx}^{(R)}_i .
+    \label{eq:matryoshka_range_reconstruction}
+\end{equation}
+This induces a range-conditioned attribution graph
+$\mathcal{G}_R=(\mathcal{V}_R,\mathcal{E}_R,\mathcal{A}_R)$ whose Matryoshka
+nodes are restricted to
+\begin{equation}
+    \mathcal{V}^{(R)}_{\mathrm{matryoshka}}
+    =
+    \{(i,k): z_{i,k}\neq 0,\ k\in R\}.
+    \label{eq:matryoshka_range_nodes}
+\end{equation}
+Features outside $R$ are not available as graph nodes; their omitted
+contribution remains in the explicit residual reconstruction-error term
+$\epsilon^{(R)}_i$. Choosing a prefix $[0,b_j)$ traces the computation at a
+cumulative abstraction level, while choosing an adjacent segment
+$[b_{j-1},b_j)$ isolates the incremental features added at that level. In this
+way, Matryoshka SAEs turn uninterested circuits into a graph-construction
+choice rather than a post-hoc pruning problem.
+
+\begin{figure}[t]
+    \centering
+    \fbox{\rule{0pt}{1.6in}\rule{0.92\linewidth}{0pt}}
+    \caption{Overview of Llama Scope 2. The final figure will show how sparse
+    autoencoders, transcoders, and Lorsas cover the principal representations
+    and computations in a Transformer block.}
+    \label{fig:overview}
+\end{figure}
+
+\section{Case studies}
+\label{sec:case_studies}
+
+\subsection{Factual Recall}
+
+\subsection{Shortcut Reasoning}
+
+\subsection{Model Circuit Comparison}
+
+\subsection{Uninterested Circuit}
+
+
+
+\section{Attribution Graph Evaluation}
+\label{sec:attribution_graph_evaluation}
+
+We evaluate the quality of attribution graphs using two graph-level metrics,
+the \emph{replacement score} and the \emph{completeness score}, following prior
+circuit-tracing work~\citep{ameisen2025circuit,shu2026completereplacement}.
+Both metrics quantify the extent to which the traced computation is explained
+by sparse features rather than reconstruction errors.
+
+\subsection{Graph Scores}
+
+Let $\mathcal{P}_{\mathrm{feat}}$, $\mathcal{P}_{\mathrm{error}}$, and
+$\mathcal{P}_{\mathrm{emb}}$ denote attribution paths originating from sparse
+feature nodes, reconstruction-error nodes, and input embeddings, respectively,
+and let $w(p)$ denote the attribution strength of path $p$.
+
+\paragraph{Replacement score} measures the fraction of all edges from the attribution graph 
+that originate from feature nodes rather than error nodes, weighted by their attribution 
+strengths:
+\begin{equation}
+S_{\mathrm{repl}}
+=
+\frac{
+    \sum_{p \in \mathcal{P}_{\mathrm{feat}}} w(p)
+}{
+    \sum_{p \in \mathcal{P}_{\mathrm{feat}}} w(p)
+    +
+    \sum_{p \in \mathcal{P}_{\mathrm{error}}} w(p)
+}.
+\label{eq:replacement_score}
+\end{equation}
+
+\paragraph{Completeness score} measures the fraction of total attribution to the 
+logit that can be traced all the way back to the input embeddings,
+rather than to error nodes:
+\begin{equation}
+S_{\mathrm{comp}}
+=
+\frac{
+    \sum_{p \in \mathcal{P}_{\mathrm{emb}}} w(p)
+}{
+    \sum_{p \in \mathcal{P}_{\mathrm{emb}}} w(p)
+    +
+    \sum_{p \in \mathcal{P}_{\mathrm{error}}} w(p)
+}
+=
+1 -
+\frac{
+    \sum_{p \in \mathcal{P}_{\mathrm{error}}} w(p)
+}{
+    \sum_{p \in \mathcal{P}_{\mathrm{emb}}} w(p)
+    +
+    \sum_{p \in \mathcal{P}_{\mathrm{error}}} w(p)
+}.
+\label{eq:completeness_score}
+\end{equation}
+
+Higher scores indicate that a larger fraction of the traced computation is
+accounted for by sparse, interpretable replacement features.
+For complete replacement models, these features include both transcoder
+features for MLP computation and Lorsa features for attention computation.
+
+\subsection{Perturbation Fidelity}
+
+We evaluate whether the replacement model preserves the downstream effect of
+an upstream perturbation. We apply the same perturbation to the original and
+replacement models and measure the cosine similarity between their resulting
+downstream activation changes. A higher similarity indicates that the
+replacement model better preserves the causal propagation of the original model.
+
+\subsection{Attribution--Intervention Consistency}
+
+We further test whether attribution scores predict the actual causal effects of
+feature interventions. We steer individual features and measure their effects
+on the output logits, then compute the Pearson correlation between these
+intervention effects and the corresponding attribution scores. A higher
+correlation indicates that the attribution graph more faithfully reflects the
+causal influence of its features.
+
+
+\section{The Llamascopium Framework}
+\label{sec:llamascopium}
+
+Llamascopium is the framework used to construct, analyze, and serve the Llama
+Scope 2 release. Its design separates sparse-dictionary architectures from data
+production, distributed execution, analysis, and visualization, allowing the
+same pipeline to support multiple model families and dictionary types.
+
+\subsection{Unified Sparse-Dictionary Interface}
+
+% TODO: Describe SparseDictionaryConfig, SparseDictionary, serialization, and
+%       from_pretrained support.
+% TODO: List the architectures relevant to this report: SAE, Matryoshka SAE,
+%       transcoder, Lorsa, and complete replacement models.
+
+\subsection{Activation Pipeline}
+
+The activation pipeline provides a common interface for generating, loading,
+filtering, shuffling, and batching model activations. It supports both flattened
+one-dimensional activations and sequence-preserving two-dimensional
+activations.
+% TODO: Describe ActivationFactory, hook-point configuration, sharding, and
+%       model backends.
+
+\subsection{Distributed Runners}
+
+Llamascopium exposes high-level runners for activation generation, training,
+evaluation, and feature analysis. These runners support combinations of data,
+tensor, model, and head parallelism according to the dictionary architecture.
+% TODO: Add a compact mapping from task and dictionary type to the parallel
+%       dimensions used in Llama Scope 2.
+
+\subsection{Analysis, Storage, and Visualization}
+
+Feature-level results are stored in a database-backed representation and served
+through an analysis API and web interface. Supported analyses include
+activation sampling, firing statistics, activation histograms, direct logit
+attribution, automated interpretation, and architecture-specific metadata such
+as Lorsa source--target patterns.
+% TODO: Describe MongoDB/GridFS records and the FastAPI/UI boundary without
+%       exposing deployment-specific details.
+
+\subsection{Circuit Analysis Engine}
+
+The circuit engine composes sparse replacement modules with the language model
+and traces attribution from output logits through residual, MLP, and attention
+latents. Reconstruction-error nodes remain explicit in the resulting graph.
+% TODO: Describe greedy attribution collection, OV attribution, Q/K tracing,
+%       pruning, and intervention interfaces.
+
+\begin{figure}[t]
+    \centering
+    \fbox{\rule{0pt}{1.7in}\rule{0.92\linewidth}{0pt}}
+    \caption{Planned architecture diagram for Llamascopium, covering model
+    backends, activation factories, sparse dictionaries, distributed runners,
+    analysis storage, visualization, and circuit tracing.}
+    \label{fig:framework}
+\end{figure}
+
+
+
+\section{Limitations and Open Problems}
+\label{sec:limitations}
+
+\paragraph{Dark matter of sparse decomposition.}
+
+\paragraph{Inhibitory Circuits.}
+
+\paragraph{}
+
+
+% TODO: Add model-family coverage, context-length, and compute limitations.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+Llama Scope 2 extends sparse dictionary releases from representation-level
+feature vocabularies toward sparse decompositions of Transformer computation.
+This report documents a unified suite for Qwen3, Llama 3.2, and Gemma 3 models
+and Llamascopium, the framework used to train, analyze, visualize, and compose
+these dictionaries for circuit analysis.
+% TODO: Add final checkpoint and code release links.
+
+\section*{Acknowledgments}
+
+% TODO: Add acknowledgments and compute support.
+
+\bibliography{iclr2025_conference}
+\bibliographystyle{iclr2025_conference}
+
+\appendix
+
+\section{Released Checkpoints}
+\label{app:checkpoints}
+
+% TODO: Add one complete row per released checkpoint family.
+
+\section{Training Hyperparameters}
+\label{app:hyperparameters}
+\subsection{TopK Training Hyperparameters}
+\label{app:topk_hyperparameters}
+
+\begin{table*}[t]
+    \centering
+    \caption{
+    Training hyperparameters for TopK Transcoders and Lorsa modules
+    on the Llama 3.2 models.
+    }
+    \label{tab:topk_training_hyperparameters_llama}
+
+    \captionsetup{skip=10pt}
+
+    \footnotesize
+    \renewcommand{\arraystretch}{1.0}
+    \setlength{\tabcolsep}{8pt}
+
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{tabular}{lllccc}
+        \toprule
+        Model
+        & Width
+        & Module
+        & $K$
+        & Learning rate
+        & $\lambda_{1}$ \\
+        \midrule
+
+        % ==================== Llama 3.2 1B ====================
+        \multirow{12}{*}{Llama 3.2 1B}
+        & \multirow{6}{*}{$8\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $7{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){2-6}
+        & \multirow{6}{*}{$32\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $2{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $2{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+
+        \midrule
+
+        % ==================== Llama 3.2 3B ====================
+        \multirow{12}{*}{Llama 3.2 3B}
+        & \multirow{6}{*}{$8\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $9{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){2-6}
+        & \multirow{6}{*}{$32\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $1{\times}10^{-4}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $8{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $9{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 128 & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+        & & & 256 & $6{\times}10^{-5}$ & $8{\times}10^{-5}$ \\
+
+        \bottomrule
+    \end{tabular}
+    \end{adjustbox}
+\end{table*}
+
+\begin{table*}[t]
+    \centering
+    \caption{
+    Training hyperparameters for TopK Transcoders and Lorsa modules
+    on the Qwen3 models. For Qwen3 1.7B,
+    $\mathcal{S}_{\mathrm{lr}}=\{0.6,0.7,0.8,0.9,1,2,3,4\}\times10^{-4}$
+    denotes the swept learning-rate set.
+    }
+    \label{tab:topk_training_hyperparameters_qwen}
+
+    \captionsetup{skip=10pt}
+
+    \footnotesize
+    \renewcommand{\arraystretch}{1.0}
+    \setlength{\tabcolsep}{8pt}
+
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{tabular}{lllccc}
+        \toprule
+        Model
+        & Width
+        & Module
+        & $K$
+        & Learning rate
+        & $\lambda_{1}$ \\
+        \midrule
+
+        % ==================== Qwen3 1.7B ====================
+        \multirow{12}{*}{Qwen3 1.7B}
+        & \multirow{6}{*}{$8\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 128 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 256 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 128 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 256 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        \cmidrule(lr){2-6}
+        & \multirow{6}{*}{$32\times$}
+        & \multirow{3}{*}{Transcoder}
+        & 64  & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 128 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 256 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        \cmidrule(lr){3-6}
+        & & \multirow{3}{*}{Lorsa}
+        & 64  & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 128 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+        & & & 256 & $\mathcal{S}_{\mathrm{lr}}$ & -- \\
+
+        \midrule
+
+        % ==================== Qwen3 8B ====================
+        \multirow{4}{*}{Qwen3 8B}
+        & \multirow{2}{*}{$8\times$}
+        & Transcoder & 256 & $1{\times}10^{-4}$ & -- \\
+        & & Lorsa & 256 & $9{\times}10^{-5}$ & -- \\
+        \cmidrule(lr){2-6}
+        & \multirow{2}{*}{$32\times$}
+        & Transcoder & 256 & $8{\times}10^{-5}$ & -- \\
+        & & Lorsa & 256 & $6{\times}10^{-5}$ & -- \\
+
+        \bottomrule
+    \end{tabular}
+    \end{adjustbox}
+\end{table*}
+
+% TODO: Add separate tables for SAEs, transcoders, and Lorsas.
+
+\section{Additional Evaluation Results}
+\label{app:additional-results}
+
+% TODO: Add per-layer reconstruction, sparsity, firing-frequency, and
+%       replacement metrics.
+
+\section{Analysis and Visualization Details}
+\label{app:analysis}
+
+% TODO: Document sampling, histogram construction, DLA, autointerpretation, and
+%       circuit graph settings.
+
+\section{Llamascopium API and Reproducibility}
+\label{app:llamascopium}
+
+% TODO: Add installation instructions, versioned configuration examples,
+%       hardware requirements, and commands for reproducing representative
+%       training, analysis, and circuit-tracing runs.
+
+\end{document}

@@ -1,0 +1,176 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{bricken2023monosemanticity,cunningham2023sae}
+\citation{he2024llamascope,lieberum2024gemma,deng2026qwenscope}
+\citation{dunefsky2024transcoder}
+\citation{he2025lorsa}
+\citation{shu2026completereplacement}
+\citation{he2024llamascope}
+\citation{deng2026qwenscope,mcdougall2025gemmascope2}
+\citation{mcdougall2025gemmascope2}
+\citation{bussmann2025matryoshka}
+\citation{shu2026completereplacement}
+\providecommand \oddpage@label [2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
+\newlabel{sec:introduction}{{1}{1}{Introduction}{section.1}{}}
+\citation{gao2024topk,rajamanoharan2024jumprelu}
+\citation{dunefsky2024transcoder}
+\citation{he2025lorsa}
+\@writefile{toc}{\contentsline {paragraph}{Contributions.}{2}{section*.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Sparse Dictionary Background}{2}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{2}{2}{Sparse Dictionary Background}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Vanilla Sparse Autoencoders}{2}{subsection.2.1}\protected@file@percent }
+\newlabel{sec:vanilla_sae}{{2.1}{2}{Vanilla Sparse Autoencoders}{subsection.2.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Per-layer Transcoders}{2}{subsection.2.2}\protected@file@percent }
+\newlabel{sec:per_layer_transcoder}{{2.2}{2}{Per-layer Transcoders}{subsection.2.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Low-rank Sparse Attention (Lorsa)}{2}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:lorsa}{{2.3}{2}{Low-rank Sparse Attention (Lorsa)}{subsection.2.3}{}}
+\citation{bussmann2025matryoshka}
+\citation{yang2025qwen3}
+\citation{joshua2023gqa}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Matryoshka Sparse Autoencoders}{3}{subsection.2.4}\protected@file@percent }
+\newlabel{sec:matryoshka_sae}{{2.4}{3}{Matryoshka Sparse Autoencoders}{subsection.2.4}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Training Llama Scope 2}{3}{section.3}\protected@file@percent }
+\newlabel{sec:training}{{3}{3}{Training Llama Scope 2}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Release Overview}{3}{subsection.3.1}\protected@file@percent }
+\citation{grattafiori2024llama}
+\citation{mcdougall2025gemmascope2}
+\citation{team2025gemma,joshua2023gqa}
+\citation{wang2026dimensional}
+\citation{team2025gemma,joshua2023gqa}
+\citation{wang2026dimensional}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces  Core Llama Scope 2 training configurations. TopK values are per token. For JumpReLU Lorsas, $L_0^\star $ is layer-dependent; arrows denote the target-$L_0$ schedules from early to deeper layers. Each listed configuration is trained layer-wise. }}{4}{table.caption.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces  Lorsa attention configurations used in our workflow scripts. \texttt  {n\_qk\_heads} is the number of Lorsa query--key heads, and $H_{\mathrm  {OV}}$ is the number of sparse output-value heads. Braced pairs list the values for $8\times $ and $32\times $ dictionaries. }}{4}{table.caption.3}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:lorsa-head-configs}{{2}{4}{Lorsa attention configurations used in our workflow scripts. \texttt {n\_qk\_heads} is the number of Lorsa query--key heads, and $H_{\mathrm {OV}}$ is the number of sparse output-value heads. Braced pairs list the values for $8\times $ and $32\times $ dictionaries}{table.caption.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Model Overview}{4}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.1}Qwen3 Models}{4}{subsubsection.3.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.2}Llama 3.2 Models}{4}{subsubsection.3.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.3}Gemma 3 Models}{4}{subsubsection.3.2.3}\protected@file@percent }
+\citation{penedo2024fineweb}
+\citation{gao2024topk}
+\citation{wang2026dimensional}
+\@writefile{toc}{\contentsline {paragraph}{Architecture adaptation for Gemma.}{5}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Activation Data}{5}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Training Details}{5}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.1}TopK Transcoders and Lorsas}{5}{subsubsection.3.4.1}\protected@file@percent }
+\newlabel{sec:topk_transcoder_lorsa}{{3.4.1}{5}{TopK Transcoders and Lorsas}{subsubsection.3.4.1}{}}
+\@writefile{toc}{\contentsline {paragraph}{Objectives}{5}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Initialization}{5}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Optimization}{5}{section*.7}\protected@file@percent }
+\citation{mcdougall2025gemmascope2}
+\citation{rajamanoharan2024jumprelu}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.2}JumpReLU Lorsa}{6}{subsubsection.3.4.2}\protected@file@percent }
+\newlabel{sec:jumprelu_lorsa}{{3.4.2}{6}{JumpReLU Lorsa}{subsubsection.3.4.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Objectives.}{6}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Initialization.}{6}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Optimization.}{6}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Sparse Decomposition Evaluation}{6}{section.4}\protected@file@percent }
+\newlabel{sec:evaluation}{{4}{6}{Sparse Decomposition Evaluation}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Evaluation Setup and Metrics}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dictionary quality.}{6}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Scaling behavior.}{6}{section*.12}\protected@file@percent }
+\citation{cunningham2024circuits,karvonen2025saebench}
+\citation{rimsky2024steering}
+\citation{deng2026qwenscope}
+\citation{chen2025persona}
+\citation{cunningham2024circuits,karvonen2025saebench}
+\citation{ameisen2025circuit,shu2026completereplacement}
+\citation{shu2026completereplacement}
+\@writefile{toc}{\contentsline {paragraph}{Model-level fidelity.}{7}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Feature interpretability.}{7}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Feature steering.}{7}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Sparse Dictionary Quality}{7}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Scaling Behavior}{7}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Replacement Fidelity}{7}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Feature Interpretability}{7}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Attribution Graph Construction}{7}{section.5}\protected@file@percent }
+\newlabel{sec:attribution_graph_construction}{{5}{7}{Attribution Graph Construction}{section.5}{}}
+\newlabel{eq:attribution_graph}{{14}{7}{Attribution Graph Construction}{equation.14}{}}
+\newlabel{eq:attribution_graph_nodes}{{15}{7}{Attribution Graph Construction}{equation.15}{}}
+\citation{ameisen2025circuit}
+\citation{ameisen2025circuit,shu2026completereplacement}
+\newlabel{eq:effective_enc_dec}{{16}{8}{Attribution Graph Construction}{equation.16}{}}
+\newlabel{eq:direct_attribution_score}{{17}{8}{Attribution Graph Construction}{equation.17}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Matryoshka SAEs for Uninterested Circuits}{8}{subsection.5.1}\protected@file@percent }
+\newlabel{sec:matryoshka_uninterested_circuits}{{5.1}{8}{Matryoshka SAEs for Uninterested Circuits}{subsection.5.1}{}}
+\newlabel{eq:matryoshka_range_mask}{{18}{8}{Matryoshka SAEs for Uninterested Circuits}{equation.18}{}}
+\newlabel{eq:matryoshka_range_reconstruction}{{19}{8}{Matryoshka SAEs for Uninterested Circuits}{equation.19}{}}
+\newlabel{eq:matryoshka_range_nodes}{{20}{8}{Matryoshka SAEs for Uninterested Circuits}{equation.20}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Overview of Llama Scope 2. The final figure will show how sparse autoencoders, transcoders, and Lorsas cover the principal representations and computations in a Transformer block.}}{9}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:overview}{{1}{9}{Overview of Llama Scope 2. The final figure will show how sparse autoencoders, transcoders, and Lorsas cover the principal representations and computations in a Transformer block}{figure.caption.16}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Case studies}{9}{section.6}\protected@file@percent }
+\newlabel{sec:case_studies}{{6}{9}{Case studies}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Factual Recall}{9}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Shortcut Reasoning}{9}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Model Circuit Comparison}{9}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Uninterested Circuit}{9}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Attribution Graph Evaluation}{9}{section.7}\protected@file@percent }
+\newlabel{sec:attribution_graph_evaluation}{{7}{9}{Attribution Graph Evaluation}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Graph Scores}{9}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Replacement score}{9}{section*.17}\protected@file@percent }
+\newlabel{eq:replacement_score}{{21}{9}{Replacement score}{equation.21}{}}
+\@writefile{toc}{\contentsline {paragraph}{Completeness score}{9}{section*.18}\protected@file@percent }
+\newlabel{eq:completeness_score}{{22}{9}{Completeness score}{equation.22}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Perturbation Fidelity}{9}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Attribution--Intervention Consistency}{10}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}The Llamascopium Framework}{10}{section.8}\protected@file@percent }
+\newlabel{sec:llamascopium}{{8}{10}{The Llamascopium Framework}{section.8}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Unified Sparse-Dictionary Interface}{10}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Activation Pipeline}{10}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Distributed Runners}{10}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Analysis, Storage, and Visualization}{10}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Circuit Analysis Engine}{10}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Limitations and Open Problems}{10}{section.9}\protected@file@percent }
+\newlabel{sec:limitations}{{9}{10}{Limitations and Open Problems}{section.9}{}}
+\@writefile{toc}{\contentsline {paragraph}{Dark matter of sparse decomposition.}{10}{section*.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Inhibitory Circuits.}{10}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{}{10}{section*.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Conclusion}{10}{section.10}\protected@file@percent }
+\newlabel{sec:conclusion}{{10}{10}{Conclusion}{section.10}{}}
+\bibdata{iclr2025_conference}
+\bibcite{joshua2023gqa}{{1}{2023}{{Ainslie et~al.}}{{Ainslie, Lee{-}Thorp, de~Jong, Zemlyanskiy, Lebr{\'{o}}n, and Sanghai}}}
+\bibcite{ameisen2025circuit}{{2}{2025}{{Ameisen et~al.}}{{Ameisen, Lindsey, Pearce, Gurnee, Turner, Chen, Citro, Abrahams, Carter, Hosmer, Marcus, Sklar, Templeton, Bricken, McDougall, Cunningham, Henighan, Jermyn, Jones, Persic, Qi, Ben~Thompson, Zimmerman, Rivoire, Conerly, Olah, and Batson}}}
+\bibcite{bricken2023monosemanticity}{{3}{2023}{{Bricken et~al.}}{{Bricken, Templeton, Batson, Chen, Jermyn, Conerly, Turner, Anil, Denison, Askell, Lasenby, Wu, Kravec, Schiefer, Maxwell, Joseph, Hatfield-Dodds, Tamkin, Nguyen, McLean, Burke, Hume, Carter, Henighan, and Olah}}}
+\bibcite{bussmann2025matryoshka}{{4}{2025}{{Bussmann et~al.}}{{Bussmann, Nabeshima, Karvonen, and Nanda}}}
+\bibcite{chen2025persona}{{5}{2025}{{Chen et~al.}}{{Chen, Arditi, Sleight, Evans, and Lindsey}}}
+\bibcite{cunningham2024circuits}{{6}{2024}{{Cunningham \& Conerly}}{{Cunningham and Conerly}}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Planned architecture diagram for Llamascopium, covering model backends, activation factories, sparse dictionaries, distributed runners, analysis storage, visualization, and circuit tracing.}}{11}{figure.caption.19}\protected@file@percent }
+\newlabel{fig:framework}{{2}{11}{Planned architecture diagram for Llamascopium, covering model backends, activation factories, sparse dictionaries, distributed runners, analysis storage, visualization, and circuit tracing}{figure.caption.19}{}}
+\bibcite{cunningham2023sae}{{7}{2023}{{Cunningham et~al.}}{{Cunningham, Ewart, Riggs, Huben, and Sharkey}}}
+\bibcite{deng2026qwenscope}{{8}{2026}{{Deng et~al.}}{{Deng, Wang, Wang, Wan, Ma, Yang, Wei, Tang, Lin, Gao, Li, Cao, Ren, Deng, Yang, Huang, Liu, and Zhou}}}
+\bibcite{dunefsky2024transcoder}{{9}{2024}{{Dunefsky et~al.}}{{Dunefsky, Chlenski, and Nanda}}}
+\bibcite{gao2024topk}{{10}{2024}{{Gao et~al.}}{{}}}
+\bibcite{grattafiori2024llama}{{11}{2024}{{Grattafiori et~al.}}{{Grattafiori, Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman, Mathur, Schelten, Vaughan, et~al.}}}
+\bibcite{he2024llamascope}{{12}{2024}{{He et~al.}}{{He, Shu, Ge, Chen, Wang, Zhou, Liu, Guo, Huang, Wu, Jiang, and Qiu}}}
+\bibcite{he2025lorsa}{{13}{2025}{{He et~al.}}{{}}}
+\bibcite{karvonen2025saebench}{{14}{2025}{{Karvonen et~al.}}{{Karvonen, Rager, Lin, Tigges, Bloom, Chanin, Lau, Farrell, McDougall, Ayonrinde, Till, Wearden, Conmy, Marks, and Nanda}}}
+\bibcite{lieberum2024gemma}{{15}{2024}{{Lieberum et~al.}}{{Lieberum, Rajamanoharan, Conmy, Smith, Sonnerat, Varma, Kram{\'a}r, Dragan, Shah, and Nanda}}}
+\bibcite{mcdougall2025gemmascope2}{{16}{2025}{{McDougall et~al.}}{{McDougall, Conmy, Kram{\'a}r, Lieberum, Rajamanoharan, and Nanda}}}
+\bibcite{penedo2024fineweb}{{17}{2024}{{Penedo et~al.}}{{Penedo, Kydl{\'{\i }}cek, Allal, Lozhkov, Mitchell, Raffel, von Werra, and Wolf}}}
+\bibcite{rajamanoharan2024jumprelu}{{18}{2024}{{Rajamanoharan et~al.}}{{Rajamanoharan, Lieberum, Sonnerat, Conmy, Varma, Kram{\'{a}}r, and Nanda}}}
+\bibcite{rimsky2024steering}{{19}{2024}{{Rimsky et~al.}}{{Rimsky, Gabrieli, Schulz, Tong, Hubinger, and Turner}}}
+\bibcite{shu2026completereplacement}{{20}{2026}{{Shu et~al.}}{{Shu, Ge, Zhou, Wang, Lin, Song, Wu, He, and Qiu}}}
+\bibcite{team2025gemma}{{21}{2025}{{Team et~al.}}{{Team, Kamath, Ferret, Pathak, Vieillard, Merhej, Perrin, Matejovicova, Ram{\'e}, Rivi{\`e}re, et~al.}}}
+\bibcite{wang2026dimensional}{{22}{2026}{{Wang et~al.}}{{Wang, Ge, Shu, He, and Qiu}}}
+\bibcite{yang2025qwen3}{{23}{2025}{{Yang et~al.}}{{Yang, Li, Yang, Zhang, Hui, Zheng, Yu, Gao, Huang, Lv, et~al.}}}
+\bibstyle{iclr2025_conference}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Released Checkpoints}{13}{appendix.A}\protected@file@percent }
+\newlabel{app:checkpoints}{{A}{13}{Released Checkpoints}{appendix.A}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Training Hyperparameters}{13}{appendix.B}\protected@file@percent }
+\newlabel{app:hyperparameters}{{B}{13}{Training Hyperparameters}{appendix.B}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B.1}TopK Training Hyperparameters}{13}{subsection.B.1}\protected@file@percent }
+\newlabel{app:topk_hyperparameters}{{B.1}{13}{TopK Training Hyperparameters}{subsection.B.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {C}Additional Evaluation Results}{13}{appendix.C}\protected@file@percent }
+\newlabel{app:additional-results}{{C}{13}{Additional Evaluation Results}{appendix.C}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {D}Analysis and Visualization Details}{13}{appendix.D}\protected@file@percent }
+\newlabel{app:analysis}{{D}{13}{Analysis and Visualization Details}{appendix.D}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {E}Llamascopium API and Reproducibility}{13}{appendix.E}\protected@file@percent }
+\newlabel{app:llamascopium}{{E}{13}{Llamascopium API and Reproducibility}{appendix.E}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces  Training hyperparameters for TopK Transcoders and Lorsa modules on the Llama 3.2 models. }}{14}{table.caption.25}\protected@file@percent }
+\newlabel{tab:topk_training_hyperparameters_llama}{{3}{14}{Training hyperparameters for TopK Transcoders and Lorsa modules on the Llama 3.2 models}{table.caption.25}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces  Training hyperparameters for TopK Transcoders and Lorsa modules on the Qwen3 models. For Qwen3 1.7B, $\mathcal  {S}_{\mathrm  {lr}}=\{0.6,0.7,0.8,0.9,1,2,3,4\}\times 10^{-4}$ denotes the swept learning-rate set. }}{14}{table.caption.26}\protected@file@percent }
+\newlabel{tab:topk_training_hyperparameters_qwen}{{4}{14}{Training hyperparameters for TopK Transcoders and Lorsa modules on the Qwen3 models. For Qwen3 1.7B, $\mathcal {S}_{\mathrm {lr}}=\{0.6,0.7,0.8,0.9,1,2,3,4\}\times 10^{-4}$ denotes the swept learning-rate set}{table.caption.26}{}}
+\gdef \@abspage@last{14}
