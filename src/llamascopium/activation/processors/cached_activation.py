@@ -189,9 +189,11 @@ class CachedActivationLoader(BaseActivationProcessor[None, Iterable[dict[str, An
         return {
             "hook_point": hook_point,
             "activation": data["activation"],
-            "mask": data["mask"],
-            "attention_mask": data["attention_mask"],
-            "tokens": data["tokens"],
+            "mask": data["mask"].bool() if isinstance(data["mask"], torch.Tensor) else data["mask"],
+            "attention_mask": data["attention_mask"].long()
+            if isinstance(data["attention_mask"], torch.Tensor)
+            else data["attention_mask"],
+            "tokens": data["tokens"].long() if isinstance(data["tokens"], torch.Tensor) else data["tokens"],
             "meta": data.get("meta"),
             "chunk_idx": chunk_idx,
         }

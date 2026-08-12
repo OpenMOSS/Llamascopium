@@ -34,6 +34,7 @@ from llamascopium.metrics import (
     ModelSpecificMetric,
 )
 from llamascopium.models.sparse_dictionary import SparseDictionary
+from llamascopium.models.protocols import NormConstrainable
 from llamascopium.optim import SparseAdam, clip_grad_norm, get_scheduler
 from llamascopium.utils.distributed import is_primary_rank
 from llamascopium.utils.distributed.ops import item
@@ -55,6 +56,12 @@ class TrainerConfig(BaseConfig):
     """Coefficient for the L1 sparsity loss. This loss is used to penalize the sparsity of the feature activations."""
     l1_coefficient_warmup_steps: int | float = 0.1
     """Steps (int) or fraction of total steps (float) to warm up the sparsity coefficient from 0."""
+    l1_target_l0_tolerance: float | None = None
+    """Trigger L0-coefficient decay once batch L0 is within this fractional tolerance above target_l0."""
+    l1_decay_after_target_steps: int | float = 0
+    """Steps (int) or fraction of total steps used to linearly decay L1 after target L0 is reached."""
+    l1_end_coefficient_ratio: float = 1.0
+    """Final L1 coefficient ratio after target-L0 decay; 1.0 disables any reduction."""
     lp_coefficient: float | None = None
     """Coefficient for the dead-latent JumpReLU pre-activation auxiliary loss."""
     auxk_coefficient: float | None = None
@@ -103,6 +110,8 @@ class TrainerConfig(BaseConfig):
     lr_cool_down_steps: int | float = 0.2
     jumprelu_lr_factor: float = 1.0
     clip_grad_norm: float = 0.0
+    clip_jumprelu_threshold_grad_norm: float = 0.0
+    unit_decoder_norm_after_step: bool = False
     feature_sampling_window: int = 1000
     total_training_tokens: int = 300_000_000
 
@@ -110,6 +119,8 @@ class TrainerConfig(BaseConfig):
     eval_frequency: int = 1000
     n_checkpoints: int = 10
     check_point_save_mode: Literal["log", "linear"] = "log"
+    save_full_checkpoint_on_finish: bool = False
+    """Whether to save a full resumable trainer checkpoint after a normal token-limited finish."""
 
     from_pretrained_path: str | None = None
     exp_result_path: str = "results"
@@ -144,6 +155,8 @@ class Trainer:
         self.k_warmup_steps: int = 0
         self.k_cold_booting_steps: int = 0
         self.l1_coefficient_warmup_steps: int = 0
+        self.l1_decay_after_target_steps: int = 0
+        self.l1_target_reached_step: int | None = None
         self.cur_step: int = 0
         self.cur_tokens: int = 0
         self.optimizer: Optimizer | None = None
@@ -177,6 +190,8 @@ class Trainer:
         else:
             sae.save_checkpoint(checkpoint_dir / "sae_weights.dcp")
 
+        dead_statistics_state = self._dead_statistics_state(sae)
+
         if is_primary_rank(sae.device_mesh):
             # Prepare trainer state
             trainer_state = {
@@ -188,15 +203,23 @@ class Trainer:
                 "k_warmup_steps": self.k_warmup_steps,
                 "k_cold_booting_steps": self.k_cold_booting_steps,
                 "l1_coefficient_warmup_steps": self.l1_coefficient_warmup_steps,
+                "l1_decay_after_target_steps": self.l1_decay_after_target_steps,
+                "l1_target_reached_step": self.l1_target_reached_step,
                 "checkpoint_thresholds": self.checkpoint_thresholds,
                 "cfg": self.cfg,
             }
+            if sae.device_mesh is None and dead_statistics_state is not None:
+                trainer_state["dead_statistics"] = dead_statistics_state
             # Save trainer state
             trainer_path = checkpoint_dir / "trainer.pt"
             torch.save(trainer_state, trainer_path)
             if self.wandb_logger is not None:
                 with open(checkpoint_dir / "wandb_run_id.json", "w") as f:
                     json.dump({"wandb_run_id": self.wandb_logger.id}, f)
+        if sae.device_mesh is not None and dead_statistics_state is not None:
+            dead_statistics_path = checkpoint_dir / "dead_statistics.dcp"
+            fs_writer = FileSystemWriter(dead_statistics_path)
+            dcp.save(dead_statistics_state, storage_writer=fs_writer)
         # Save optimizer state - handle distributed tensors
         if self.optimizer is not None:
             if sae.device_mesh is None:
@@ -257,9 +280,27 @@ class Trainer:
             trainer = cls(cfg)
             trainer.cfg.from_pretrained_path = checkpoint_path
             if config_overrides is not None:
-                if config_overrides.lp_coefficient is not None:
-                    trainer.cfg.lp_coefficient = config_overrides.lp_coefficient
-                trainer.cfg.dead_threshold = config_overrides.dead_threshold
+                override_fields = [
+                    "lp_coefficient",
+                    "auxk_coefficient",
+                    "k_aux",
+                    "dead_threshold",
+                    "sparsity_loss_type",
+                    "target_l0",
+                    "l1_coefficient",
+                    "l1_coefficient_warmup_steps",
+                    "l1_target_l0_tolerance",
+                    "l1_decay_after_target_steps",
+                    "l1_end_coefficient_ratio",
+                    "jumprelu_lr_factor",
+                    "clip_grad_norm",
+                    "clip_jumprelu_threshold_grad_norm",
+                    "unit_decoder_norm_after_step",
+                    "save_full_checkpoint_on_finish",
+                    "exp_result_path",
+                ]
+                for field in override_fields:
+                    setattr(trainer.cfg, field, getattr(config_overrides, field))
 
             # Restore trainer state variables
             trainer.cur_step = trainer_state["cur_step"]
@@ -270,6 +311,8 @@ class Trainer:
             trainer.k_warmup_steps = trainer_state["k_warmup_steps"]
             trainer.k_cold_booting_steps = trainer_state["k_cold_booting_steps"]
             trainer.l1_coefficient_warmup_steps = trainer_state["l1_coefficient_warmup_steps"]
+            trainer.l1_decay_after_target_steps = trainer_state.get("l1_decay_after_target_steps", 0)
+            trainer.l1_target_reached_step = trainer_state.get("l1_target_reached_step")
             trainer.checkpoint_thresholds = trainer_state["checkpoint_thresholds"]
 
             if total_training_tokens is not None and total_training_tokens > trainer.cfg.total_training_tokens:
@@ -283,6 +326,7 @@ class Trainer:
                     f"{trainer.cfg.total_training_tokens} tokens / {trainer.total_training_steps} steps"
                 )
 
+            trainer._load_dead_statistics(sae, checkpoint_dir, trainer_state)
             logger.info(f"Loaded trainer state from step {trainer.cur_step}")
         else:
             raise ValueError(f"Trainer checkpoint not found at {trainer_path}")
@@ -325,6 +369,54 @@ class Trainer:
         logger.info(f"Checkpoint loaded from {checkpoint_path}")
         return trainer
 
+    def _dead_statistics_state(self, sae: SparseDictionary) -> dict[str, Tensor] | None:
+        if self.tokens_since_last_activation is None or self.is_dead is None:
+            return None
+        if sae.device_mesh is None:
+            return {
+                "tokens_since_last_activation": self.tokens_since_last_activation.detach().cpu(),
+                "is_dead": self.is_dead.detach().cpu(),
+            }
+        return {
+            "tokens_since_last_activation": self.tokens_since_last_activation,
+            "is_dead": self.is_dead,
+        }
+
+    def _load_dead_statistics(
+        self,
+        sae: SparseDictionary,
+        checkpoint_dir: Path,
+        trainer_state: dict[str, Any],
+    ) -> None:
+        if sae.device_mesh is None:
+            dead_statistics_state = trainer_state.get("dead_statistics")
+            if dead_statistics_state is None:
+                logger.info("No dead statistics found in checkpoint; they will be initialized on first use")
+                return
+            self.tokens_since_last_activation = dead_statistics_state["tokens_since_last_activation"].to(
+                device=sae.cfg.device, dtype=torch.long
+            )
+            self.is_dead = dead_statistics_state["is_dead"].to(device=sae.cfg.device, dtype=torch.bool)
+            logger.info("Loaded dead statistics from trainer checkpoint")
+            return
+
+        dead_statistics_path = checkpoint_dir / "dead_statistics.dcp"
+        if not dead_statistics_path.exists():
+            logger.info("No distributed dead statistics found in checkpoint; they will be initialized on first use")
+            return
+
+        self._initialize_dead_statistics(sae)
+        assert self.tokens_since_last_activation is not None and self.is_dead is not None
+        dead_statistics_state = {
+            "tokens_since_last_activation": self.tokens_since_last_activation,
+            "is_dead": self.is_dead,
+        }
+        fs_reader = FileSystemReader(str(dead_statistics_path))
+        dcp.load(dead_statistics_state, storage_reader=fs_reader)
+        self.tokens_since_last_activation = dead_statistics_state["tokens_since_last_activation"]
+        self.is_dead = dead_statistics_state["is_dead"]
+        logger.info("Loaded distributed dead statistics from checkpoint")
+
     @timer.time("initialize_trainer")
     def _initialize_trainer(
         self,
@@ -352,6 +444,7 @@ class Trainer:
         self.k_warmup_steps = calculate_warmup_steps(self.cfg.k_warmup_steps)
         self.k_cold_booting_steps = calculate_warmup_steps(self.cfg.k_cold_booting_steps)
         self.l1_coefficient_warmup_steps = calculate_warmup_steps(self.cfg.l1_coefficient_warmup_steps)
+        self.l1_decay_after_target_steps = calculate_warmup_steps(self.cfg.l1_decay_after_target_steps)
         if self.cfg.n_checkpoints > 0:
             if self.cfg.check_point_save_mode == "linear":
                 self.checkpoint_thresholds = list(
@@ -503,11 +596,7 @@ class Trainer:
                     )
                 )
 
-        l1_coefficient = (
-            min(1.0, self.cur_step / self.l1_coefficient_warmup_steps) * self.cfg.l1_coefficient
-            if self.cfg.l1_coefficient is not None
-            else 1.0
-        )
+        l1_coefficient = self._get_l1_coefficient()
 
         lp_coefficient = self.cfg.lp_coefficient if self.cfg.lp_coefficient is not None else 0.0
 
@@ -528,7 +617,58 @@ class Trainer:
             k_aux=self.cfg.k_aux,
             update_dead_statistics=self.update_dead_statistics if needs_dead_statistics else None,
         )
+        self._update_l1_target_decay(sae, ctx)
+        ctx["l1_target_reached_step"] = self.l1_target_reached_step
+        ctx["l1_decay_progress"] = self._get_l1_decay_progress()
         return ctx
+
+    def _get_l1_coefficient(self) -> float:
+        if self.cfg.l1_coefficient is None:
+            return 1.0
+
+        if self.l1_coefficient_warmup_steps > 0:
+            coefficient = min(1.0, self.cur_step / self.l1_coefficient_warmup_steps) * self.cfg.l1_coefficient
+        else:
+            coefficient = self.cfg.l1_coefficient
+
+        decay_progress = self._get_l1_decay_progress()
+        return coefficient * (1.0 - decay_progress * (1.0 - self.cfg.l1_end_coefficient_ratio))
+
+    def _get_l1_decay_progress(self) -> float:
+        if self.l1_target_reached_step is None:
+            return 0.0
+        if self.l1_decay_after_target_steps <= 0:
+            return 1.0
+        return min(1.0, (self.cur_step - self.l1_target_reached_step) / self.l1_decay_after_target_steps)
+
+    @torch.no_grad()
+    def _update_l1_target_decay(self, sae: SparseDictionary, ctx: dict[str, Tensor]) -> None:
+        if self.l1_target_reached_step is not None:
+            return
+        if (
+            self.cfg.l1_target_l0_tolerance is None
+            or self.cfg.target_l0 is None
+            or self.cfg.l1_coefficient is None
+            or self.l1_decay_after_target_steps <= 0
+            or self.cur_step < self.l1_coefficient_warmup_steps
+        ):
+            return
+
+        feature_acts = ctx["feature_acts"]
+        batch_l0, batch_l0_specs = apply_token_mask(
+            (feature_acts > 0).float(),
+            sae.specs.feature_acts(feature_acts),
+            ctx.get("mask"),
+            "mean",
+        )
+        batch_l0, _ = reduce(batch_l0, batch_l0_specs, {"sae": "sum"})
+        if item(batch_l0.mean()) <= self.cfg.target_l0 * (1 + self.cfg.l1_target_l0_tolerance):
+            self.l1_target_reached_step = self.cur_step
+            logger.info(
+                "L0 target reached at step %s; decaying L1 coefficient over %s steps",
+                self.cur_step,
+                self.l1_decay_after_target_steps,
+            )
 
     @torch.no_grad()
     @timer.time("log")
@@ -566,6 +706,8 @@ class Trainer:
                     "details/current_learning_rate": self.optimizer.param_groups[0]["lr"],
                     "details/n_training_tokens": self.cur_tokens,
                     "details/l1_coefficient": ctx.get("l1_coefficient"),
+                    "details/l1_target_reached_step": ctx.get("l1_target_reached_step"),
+                    "details/l1_decay_progress": ctx.get("l1_decay_progress"),
                     "details/lp_coefficient": ctx.get("lp_coefficient"),
                     "details/auxk_coefficient": ctx.get("auxk_coefficient"),
                     "details/n_dead": item(ctx["n_dead"]) if ctx.get("n_dead") is not None else None,
@@ -573,6 +715,9 @@ class Trainer:
                         item(ctx["dead_pre_activation_deficit"])
                         if ctx.get("dead_pre_activation_deficit") is not None
                         else None
+                    ),
+                    "metrics/jumprelu_threshold_grad_norm_before_clipping": ctx.get(
+                        "jumprelu_threshold_grad_norm_before_clipping"
                     ),
                 }
             )
@@ -619,7 +764,10 @@ class Trainer:
         if (self.cfg.auxk_coefficient is not None and self.cfg.auxk_coefficient > 0.0) or (
             self.cfg.lp_coefficient is not None and self.cfg.lp_coefficient > 0.0
         ):
-            self._initialize_dead_statistics(sae)
+            if self.tokens_since_last_activation is None or self.is_dead is None:
+                self._initialize_dead_statistics(sae)
+            else:
+                logger.info("Using restored dead statistics")
 
         assert self.optimizer is not None and self.scheduler is not None, (
             "Optimizer and scheduler should be already initialized"
@@ -686,6 +834,20 @@ class Trainer:
                             ],
                             max_norm=self.cfg.clip_grad_norm if self.cfg.clip_grad_norm > 0 else math.inf,
                         )
+                        threshold_parameters = [
+                            param
+                            for name, param in sae.named_parameters()
+                            if param.grad is not None and "log_jumprelu_threshold" in name
+                        ]
+                        if threshold_parameters:
+                            ctx["jumprelu_threshold_grad_norm_before_clipping"] = clip_grad_norm(
+                                threshold_parameters,
+                                max_norm=(
+                                    self.cfg.clip_jumprelu_threshold_grad_norm
+                                    if self.cfg.clip_jumprelu_threshold_grad_norm > 0
+                                    else math.inf
+                                ),
+                            )
 
                     if not self.cfg.skip_metrics_calculation:
                         with torch.autocast(device_type=sae.cfg.device, dtype=self.cfg.amp_dtype):
@@ -693,6 +855,11 @@ class Trainer:
 
                     with timer.time("optimizer_step"):
                         self.optimizer.step()
+                        if self.cfg.unit_decoder_norm_after_step:
+                            assert isinstance(sae, NormConstrainable), (
+                                "unit_decoder_norm_after_step requires a norm-constrainable sparse dictionary"
+                            )
+                            sae.transform_to_unit_decoder_norm()
                         self.optimizer.zero_grad()
 
                     if eval_fn is not None and (self.cur_step + 1) % self.cfg.eval_frequency == 0:
