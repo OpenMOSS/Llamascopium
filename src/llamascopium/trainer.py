@@ -56,6 +56,12 @@ class TrainerConfig(BaseConfig):
     """Coefficient for the L1 sparsity loss. This loss is used to penalize the sparsity of the feature activations."""
     l1_coefficient_warmup_steps: int | float = 0.1
     """Steps (int) or fraction of total steps (float) to warm up the sparsity coefficient from 0."""
+    l1_target_l0_tolerance: float | None = None
+    """Trigger L0-coefficient decay once batch L0 is within this fractional tolerance above target_l0."""
+    l1_decay_after_target_steps: int | float = 0
+    """Steps (int) or fraction of total steps used to linearly decay L1 after target L0 is reached."""
+    l1_end_coefficient_ratio: float = 1.0
+    """Final L1 coefficient ratio after target-L0 decay; 1.0 disables any reduction."""
     lp_coefficient: float | None = None
     """Coefficient for the dead-latent JumpReLU pre-activation auxiliary loss."""
     auxk_coefficient: float | None = None
@@ -149,6 +155,8 @@ class Trainer:
         self.k_warmup_steps: int = 0
         self.k_cold_booting_steps: int = 0
         self.l1_coefficient_warmup_steps: int = 0
+        self.l1_decay_after_target_steps: int = 0
+        self.l1_target_reached_step: int | None = None
         self.cur_step: int = 0
         self.cur_tokens: int = 0
         self.optimizer: Optimizer | None = None
@@ -195,6 +203,8 @@ class Trainer:
                 "k_warmup_steps": self.k_warmup_steps,
                 "k_cold_booting_steps": self.k_cold_booting_steps,
                 "l1_coefficient_warmup_steps": self.l1_coefficient_warmup_steps,
+                "l1_decay_after_target_steps": self.l1_decay_after_target_steps,
+                "l1_target_reached_step": self.l1_target_reached_step,
                 "checkpoint_thresholds": self.checkpoint_thresholds,
                 "cfg": self.cfg,
             }
@@ -279,6 +289,9 @@ class Trainer:
                     "target_l0",
                     "l1_coefficient",
                     "l1_coefficient_warmup_steps",
+                    "l1_target_l0_tolerance",
+                    "l1_decay_after_target_steps",
+                    "l1_end_coefficient_ratio",
                     "jumprelu_lr_factor",
                     "clip_grad_norm",
                     "clip_jumprelu_threshold_grad_norm",
@@ -298,6 +311,8 @@ class Trainer:
             trainer.k_warmup_steps = trainer_state["k_warmup_steps"]
             trainer.k_cold_booting_steps = trainer_state["k_cold_booting_steps"]
             trainer.l1_coefficient_warmup_steps = trainer_state["l1_coefficient_warmup_steps"]
+            trainer.l1_decay_after_target_steps = trainer_state.get("l1_decay_after_target_steps", 0)
+            trainer.l1_target_reached_step = trainer_state.get("l1_target_reached_step")
             trainer.checkpoint_thresholds = trainer_state["checkpoint_thresholds"]
 
             if total_training_tokens is not None and total_training_tokens > trainer.cfg.total_training_tokens:
@@ -429,6 +444,7 @@ class Trainer:
         self.k_warmup_steps = calculate_warmup_steps(self.cfg.k_warmup_steps)
         self.k_cold_booting_steps = calculate_warmup_steps(self.cfg.k_cold_booting_steps)
         self.l1_coefficient_warmup_steps = calculate_warmup_steps(self.cfg.l1_coefficient_warmup_steps)
+        self.l1_decay_after_target_steps = calculate_warmup_steps(self.cfg.l1_decay_after_target_steps)
         if self.cfg.n_checkpoints > 0:
             if self.cfg.check_point_save_mode == "linear":
                 self.checkpoint_thresholds = list(
@@ -580,11 +596,7 @@ class Trainer:
                     )
                 )
 
-        l1_coefficient = (
-            min(1.0, self.cur_step / self.l1_coefficient_warmup_steps) * self.cfg.l1_coefficient
-            if self.cfg.l1_coefficient is not None
-            else 1.0
-        )
+        l1_coefficient = self._get_l1_coefficient()
 
         lp_coefficient = self.cfg.lp_coefficient if self.cfg.lp_coefficient is not None else 0.0
 
@@ -605,7 +617,58 @@ class Trainer:
             k_aux=self.cfg.k_aux,
             update_dead_statistics=self.update_dead_statistics if needs_dead_statistics else None,
         )
+        self._update_l1_target_decay(sae, ctx)
+        ctx["l1_target_reached_step"] = self.l1_target_reached_step
+        ctx["l1_decay_progress"] = self._get_l1_decay_progress()
         return ctx
+
+    def _get_l1_coefficient(self) -> float:
+        if self.cfg.l1_coefficient is None:
+            return 1.0
+
+        if self.l1_coefficient_warmup_steps > 0:
+            coefficient = min(1.0, self.cur_step / self.l1_coefficient_warmup_steps) * self.cfg.l1_coefficient
+        else:
+            coefficient = self.cfg.l1_coefficient
+
+        decay_progress = self._get_l1_decay_progress()
+        return coefficient * (1.0 - decay_progress * (1.0 - self.cfg.l1_end_coefficient_ratio))
+
+    def _get_l1_decay_progress(self) -> float:
+        if self.l1_target_reached_step is None:
+            return 0.0
+        if self.l1_decay_after_target_steps <= 0:
+            return 1.0
+        return min(1.0, (self.cur_step - self.l1_target_reached_step) / self.l1_decay_after_target_steps)
+
+    @torch.no_grad()
+    def _update_l1_target_decay(self, sae: SparseDictionary, ctx: dict[str, Tensor]) -> None:
+        if self.l1_target_reached_step is not None:
+            return
+        if (
+            self.cfg.l1_target_l0_tolerance is None
+            or self.cfg.target_l0 is None
+            or self.cfg.l1_coefficient is None
+            or self.l1_decay_after_target_steps <= 0
+            or self.cur_step < self.l1_coefficient_warmup_steps
+        ):
+            return
+
+        feature_acts = ctx["feature_acts"]
+        batch_l0, batch_l0_specs = apply_token_mask(
+            (feature_acts > 0).float(),
+            sae.specs.feature_acts(feature_acts),
+            ctx.get("mask"),
+            "mean",
+        )
+        batch_l0, _ = reduce(batch_l0, batch_l0_specs, {"sae": "sum"})
+        if item(batch_l0.mean()) <= self.cfg.target_l0 * (1 + self.cfg.l1_target_l0_tolerance):
+            self.l1_target_reached_step = self.cur_step
+            logger.info(
+                "L0 target reached at step %s; decaying L1 coefficient over %s steps",
+                self.cur_step,
+                self.l1_decay_after_target_steps,
+            )
 
     @torch.no_grad()
     @timer.time("log")
@@ -643,6 +706,8 @@ class Trainer:
                     "details/current_learning_rate": self.optimizer.param_groups[0]["lr"],
                     "details/n_training_tokens": self.cur_tokens,
                     "details/l1_coefficient": ctx.get("l1_coefficient"),
+                    "details/l1_target_reached_step": ctx.get("l1_target_reached_step"),
+                    "details/l1_decay_progress": ctx.get("l1_decay_progress"),
                     "details/lp_coefficient": ctx.get("lp_coefficient"),
                     "details/auxk_coefficient": ctx.get("auxk_coefficient"),
                     "details/n_dead": item(ctx["n_dead"]) if ctx.get("n_dead") is not None else None,
