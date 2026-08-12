@@ -530,6 +530,15 @@ def _write_job_result(
     job = group.jobs[index]
     counts = group.counts[index].detach().cpu().tolist()
     proposal = job.proposal
+    effective_validation = copy.deepcopy(proposal["validation"][0])
+    effective_validation.pop("selection_metrics", None)
+    effective_validation["status"] = status
+    effective_validation["cases"] = {
+        "source": "random_dataset_scan",
+        "dataset_path": str(dataset_path),
+        "seed": seed,
+        "feature_fens_evaluated": int(group.processed_fens[index].item()),
+    }
     payload = {
         "status": status,
         "feature": {
@@ -541,7 +550,7 @@ def _write_job_result(
         "taxonomy": proposal.get("taxonomy"),
         "interpretation": proposal.get("interpretation"),
         "rationale": proposal.get("rationale"),
-        "validation": proposal["validation"][0],
+        "validation": effective_validation,
         "activation_threshold": {
             "ratio": job.threshold / job.max_activation,
             "max_activation": job.max_activation,

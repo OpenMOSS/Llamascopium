@@ -237,6 +237,11 @@ restore_meta.py
 !/scripts/circuit_taxonomy/README.md
 !/scripts/circuit_taxonomy/taxonomy_runner.py
 !/scripts/circuit_taxonomy/sync_reviewed_taxonomy_to_interpretations.py
+!/scripts/circuit_taxonomy/score_autointerp_evidence.py
+!/scripts/circuit_taxonomy/select_circuit_autointerp_evidence.py
+!/scripts/circuit_taxonomy/AutoInterp Scores/
+!/scripts/circuit_taxonomy/AutoInterp Scores/*.json
+/scripts/circuit_taxonomy/AutoInterp Scores/*.jsonl
 
 # Shared-file RPC runtime queue
 .shared_file_rpc/

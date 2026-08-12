@@ -1,0 +1,68 @@
+{
+  "source": "scripts/circuit_taxonomy/evidence/per-circuit",
+  "selection": "uniform_without_replacement_from_unique_features_with_6_usable_samples",
+  "seed": 42,
+  "features_per_layer": 20,
+  "layers": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "input_stats": {
+    "evidence_files": 100,
+    "unique_features": 9512,
+    "features_with_interpretation_conflicts": 0
+  },
+  "selected_by_layer": {
+    "lorsa": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20,
+      "6": 20,
+      "7": 20,
+      "8": 20,
+      "9": 20,
+      "10": 20,
+      "11": 20,
+      "12": 20,
+      "13": 20,
+      "14": 20
+    },
+    "transcoder": {
+      "0": 20,
+      "1": 20,
+      "2": 20,
+      "3": 20,
+      "4": 20,
+      "5": 20,
+      "6": 20,
+      "7": 20,
+      "8": 20,
+      "9": 20,
+      "10": 20,
+      "11": 20,
+      "12": 20,
+      "13": 20,
+      "14": 20
+    }
+  },
+  "outputs": {
+    "lorsa": "scripts/circuit_taxonomy/AutoInterp Scores/circuit_lorsa_selected_evidence.jsonl",
+    "transcoder": "scripts/circuit_taxonomy/AutoInterp Scores/circuit_transcoder_selected_evidence.jsonl"
+  }
+}
