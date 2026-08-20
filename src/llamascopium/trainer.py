@@ -43,7 +43,7 @@ from llamascopium.utils.misc import (
     convert_str_to_torch_dtype,
     convert_torch_dtype_to_str,
 )
-from llamascopium.utils.tensor_specs import apply_token_mask
+from llamascopium.utils.tensor_specs import apply_token_mask, reduce
 from llamascopium.utils.timer import timer
 
 logger = get_distributed_logger("trainer")
@@ -62,6 +62,8 @@ class TrainerConfig(BaseConfig):
     """Steps (int) or fraction of total steps used to linearly decay L1 after target L0 is reached."""
     l1_end_coefficient_ratio: float = 1.0
     """Final L1 coefficient ratio after target-L0 decay; 1.0 disables any reduction."""
+    jumprelu_threshold_freeze_l0_tolerance: float | None = None
+    """Freeze JumpReLU thresholds once batch L0 is within this fractional tolerance above target_l0."""
     lp_coefficient: float | None = None
     """Coefficient for the dead-latent JumpReLU pre-activation auxiliary loss."""
     auxk_coefficient: float | None = None
@@ -157,6 +159,7 @@ class Trainer:
         self.l1_coefficient_warmup_steps: int = 0
         self.l1_decay_after_target_steps: int = 0
         self.l1_target_reached_step: int | None = None
+        self.jumprelu_threshold_frozen_step: int | None = None
         self.cur_step: int = 0
         self.cur_tokens: int = 0
         self.optimizer: Optimizer | None = None
@@ -205,6 +208,7 @@ class Trainer:
                 "l1_coefficient_warmup_steps": self.l1_coefficient_warmup_steps,
                 "l1_decay_after_target_steps": self.l1_decay_after_target_steps,
                 "l1_target_reached_step": self.l1_target_reached_step,
+                "jumprelu_threshold_frozen_step": self.jumprelu_threshold_frozen_step,
                 "checkpoint_thresholds": self.checkpoint_thresholds,
                 "cfg": self.cfg,
             }
@@ -292,6 +296,7 @@ class Trainer:
                     "l1_target_l0_tolerance",
                     "l1_decay_after_target_steps",
                     "l1_end_coefficient_ratio",
+                    "jumprelu_threshold_freeze_l0_tolerance",
                     "jumprelu_lr_factor",
                     "clip_grad_norm",
                     "clip_jumprelu_threshold_grad_norm",
@@ -313,6 +318,7 @@ class Trainer:
             trainer.l1_coefficient_warmup_steps = trainer_state["l1_coefficient_warmup_steps"]
             trainer.l1_decay_after_target_steps = trainer_state.get("l1_decay_after_target_steps", 0)
             trainer.l1_target_reached_step = trainer_state.get("l1_target_reached_step")
+            trainer.jumprelu_threshold_frozen_step = trainer_state.get("jumprelu_threshold_frozen_step")
             trainer.checkpoint_thresholds = trainer_state["checkpoint_thresholds"]
 
             if total_training_tokens is not None and total_training_tokens > trainer.cfg.total_training_tokens:
@@ -618,8 +624,10 @@ class Trainer:
             update_dead_statistics=self.update_dead_statistics if needs_dead_statistics else None,
         )
         self._update_l1_target_decay(sae, ctx)
+        self._update_jumprelu_threshold_freeze(sae, ctx)
         ctx["l1_target_reached_step"] = self.l1_target_reached_step
         ctx["l1_decay_progress"] = self._get_l1_decay_progress()
+        ctx["jumprelu_threshold_frozen_step"] = self.jumprelu_threshold_frozen_step
         return ctx
 
     def _get_l1_coefficient(self) -> float:
@@ -642,6 +650,18 @@ class Trainer:
         return min(1.0, (self.cur_step - self.l1_target_reached_step) / self.l1_decay_after_target_steps)
 
     @torch.no_grad()
+    def _batch_l0(self, sae: SparseDictionary, ctx: dict[str, Tensor]) -> float:
+        feature_acts = ctx["feature_acts"]
+        batch_l0, batch_l0_specs = apply_token_mask(
+            (feature_acts > 0).float(),
+            sae.specs.feature_acts(feature_acts),
+            ctx.get("mask"),
+            "mean",
+        )
+        batch_l0, _ = reduce(batch_l0, batch_l0_specs, {"sae": "sum"})
+        return item(batch_l0.mean())
+
+    @torch.no_grad()
     def _update_l1_target_decay(self, sae: SparseDictionary, ctx: dict[str, Tensor]) -> None:
         if self.l1_target_reached_step is not None:
             return
@@ -654,21 +674,39 @@ class Trainer:
         ):
             return
 
-        feature_acts = ctx["feature_acts"]
-        batch_l0, batch_l0_specs = apply_token_mask(
-            (feature_acts > 0).float(),
-            sae.specs.feature_acts(feature_acts),
-            ctx.get("mask"),
-            "mean",
-        )
-        batch_l0, _ = reduce(batch_l0, batch_l0_specs, {"sae": "sum"})
-        if item(batch_l0.mean()) <= self.cfg.target_l0 * (1 + self.cfg.l1_target_l0_tolerance):
+        if self._batch_l0(sae, ctx) <= self.cfg.target_l0 * (1 + self.cfg.l1_target_l0_tolerance):
             self.l1_target_reached_step = self.cur_step
             logger.info(
                 "L0 target reached at step %s; decaying L1 coefficient over %s steps",
                 self.cur_step,
                 self.l1_decay_after_target_steps,
             )
+
+    @torch.no_grad()
+    def _update_jumprelu_threshold_freeze(self, sae: SparseDictionary, ctx: dict[str, Tensor]) -> None:
+        if self.jumprelu_threshold_frozen_step is not None:
+            return
+        if (
+            self.cfg.jumprelu_threshold_freeze_l0_tolerance is None
+            or self.cfg.target_l0 is None
+            or self.cur_step < self.l1_coefficient_warmup_steps
+        ):
+            return
+
+        if self._batch_l0(sae, ctx) <= self.cfg.target_l0 * (
+            1 + self.cfg.jumprelu_threshold_freeze_l0_tolerance
+        ):
+            self.jumprelu_threshold_frozen_step = self.cur_step
+            logger.info(
+                "L0 reached the threshold-freeze range at step %s; freezing JumpReLU thresholds",
+                self.cur_step,
+            )
+
+    @staticmethod
+    def _clear_jumprelu_threshold_gradients(sae: SparseDictionary) -> None:
+        for name, parameter in sae.named_parameters():
+            if "log_jumprelu_threshold" in name:
+                parameter.grad = None
 
     @torch.no_grad()
     @timer.time("log")
@@ -708,6 +746,7 @@ class Trainer:
                     "details/l1_coefficient": ctx.get("l1_coefficient"),
                     "details/l1_target_reached_step": ctx.get("l1_target_reached_step"),
                     "details/l1_decay_progress": ctx.get("l1_decay_progress"),
+                    "details/jumprelu_threshold_frozen_step": ctx.get("jumprelu_threshold_frozen_step"),
                     "details/lp_coefficient": ctx.get("lp_coefficient"),
                     "details/auxk_coefficient": ctx.get("auxk_coefficient"),
                     "details/n_dead": item(ctx["n_dead"]) if ctx.get("n_dead") is not None else None,
@@ -823,6 +862,9 @@ class Trainer:
 
                     with timer.time("backward"):
                         ctx["loss"].backward()
+
+                    if self.jumprelu_threshold_frozen_step is not None:
+                        self._clear_jumprelu_threshold_gradients(sae)
 
                     with timer.time("clip_grad_norm"):
                         # exclude the grad of the jumprelu threshold
