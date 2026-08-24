@@ -369,17 +369,20 @@ class ReplacementModel(HookedTransformer):
         zero_bos: bool = False,
         sparse: bool = False,
         apply_activation_function: bool = True,
+        first_batch_only: bool = False,
     ) -> Tuple[List, List, List[Tuple[str, Callable]]]:
 
         activation_matrix = [None] * self.cfg.n_layers * 2
         lorsa_attention_pattern = [None] * self.cfg.n_layers
         
         def cache_activations_attn(acts, hook, layer, zero_bos):
-            encode_result = self.lorsas[layer].encode(
-                acts,
-                return_hidden_pre=not apply_activation_function,
-                return_attention_pattern=True
-            )
+            feature_inputs = acts[:1] if first_batch_only else acts
+            with torch.no_grad():
+                encode_result = self.lorsas[layer].encode(
+                    feature_inputs,
+                    return_hidden_pre=not apply_activation_function,
+                    return_attention_pattern=True
+                )
 
             if not apply_activation_function:
                 lorsa_acts = encode_result[1].detach().squeeze(0)
@@ -406,10 +409,12 @@ class ReplacementModel(HookedTransformer):
         print("init activation_hooks")
         def cache_activations_mlp(acts, hook, layer, zero_bos):
             # 使用individual SAE而不是CrossLayerTranscoder
-            transcoder_acts = self.transcoders[str(layer)].encode(
-                acts,
-                return_hidden_pre=not apply_activation_function
-            )
+            feature_inputs = acts[:1] if first_batch_only else acts
+            with torch.no_grad():
+                transcoder_acts = self.transcoders[str(layer)].encode(
+                    feature_inputs,
+                    return_hidden_pre=not apply_activation_function
+                )
 
             if not apply_activation_function:
                 transcoder_acts = transcoder_acts[1].detach().squeeze(0)
@@ -460,105 +465,93 @@ class ReplacementModel(HookedTransformer):
             activation_cache = activation_cache.coalesce()
         return logits, activation_cache, lorsa_attention_pattern
 
-    @torch.no_grad()
     def setup_attribution(
         self,
         inputs: Union[str, torch.Tensor],
         sparse: bool = False,
         zero_bos: bool = False,
+        *,
+        extra_fwd_hooks: List[Tuple[str, Callable]] | None = None,
+        enable_grad: bool = False,
+        first_batch_only: bool = False,
     ):
 
         if isinstance(inputs, torch.Tensor):
-            tokens = inputs.squeeze(0)
-            assert tokens.ndim == 1, "Tokens must be a 1D tensor"
+            tokens = inputs.squeeze(0) if inputs.shape[0] == 1 else inputs
         else:
             tokens = inputs
 
         
         activation_matrix, lorsa_attention_pattern, activation_hooks = self._get_activation_caching_hooks(
-            sparse=sparse, zero_bos=zero_bos
+            sparse=sparse,
+            zero_bos=zero_bos,
+            first_batch_only=first_batch_only,
         )
-        
-        attn_out_cache, attn_out_caching_hooks, _ = self.get_caching_hooks(
-            lambda name: self.attn_output_hook in name
-        )
-        mlp_out_cache, mlp_out_caching_hooks, _ = self.get_caching_hooks(
-            lambda name: self.mlp_output_hook in name
-        )
-        
-        # 添加policy head q和k的缓存hooks（如果policy_head存在）
-        policy_cache = {}
-        policy_caching_hooks = []
-        if hasattr(self, 'policy_head'):
-            policy_cache, policy_caching_hooks, _ = self.get_caching_hooks(
-                lambda name: ("policy_head.hook_q" in name or 
-                             "policy_head.hook_k" in name)
+
+        attn_out_cache = {}
+        mlp_out_cache = {}
+        embed_cache = {}
+
+        def cache_first(cache, acts, hook):
+            cache[hook.name] = acts[:1].detach()
+            return acts
+
+        first_lane_hooks = [
+            (
+                f"blocks.{layer}.{self.attn_output_hook}",
+                partial(cache_first, attn_out_cache),
             )
-
-        seq_len = len(tokens) if isinstance(tokens, torch.Tensor) else 64 # 64 for chess model
-        error_vectors = torch.zeros(
-            [self.cfg.n_layers * 2, seq_len, self.cfg.d_model],
-            device=self.cfg.device,
-            dtype=self.cfg.dtype,
+            for layer in range(self.cfg.n_layers)
+        ]
+        first_lane_hooks.extend(
+            (
+                f"blocks.{layer}.{self.mlp_output_hook}",
+                partial(cache_first, mlp_out_cache),
+            )
+            for layer in range(self.cfg.n_layers)
         )
+        first_lane_hooks.append(("hook_embed", partial(cache_first, embed_cache)))
 
-        all_hooks = activation_hooks + attn_out_caching_hooks + mlp_out_caching_hooks + policy_caching_hooks
-        logits = self.run_with_hooks(tokens, fwd_hooks=all_hooks)
-        
-        # 缓存policy head的q和k activations到模型属性中
-        if hasattr(self, 'policy_head'):
-            for hook_name, cached_value in policy_cache.items():
-                if "hook_q" in hook_name:
-                    self._policy_q_activations = cached_value
-                elif "hook_k" in hook_name:
-                    self._policy_k_activations = cached_value
-        
-        
+        all_hooks = (
+            activation_hooks
+            + first_lane_hooks
+            + list(extra_fwd_hooks or ())
+        )
+        grad_context = torch.enable_grad() if enable_grad else torch.no_grad()
+        with grad_context:
+            logits = self.run_with_hooks(tokens, fwd_hooks=all_hooks)
+
         lorsa_activation_matrix = activation_matrix[:self.cfg.n_layers]
         tc_activation_matrix = activation_matrix[self.cfg.n_layers:]
 
-        lorsa_reconstruction = torch.stack([
-            self.lorsas[layer].decode(lorsa_activation_matrix[layer])
-            for layer in range(self.cfg.n_layers)
-        ])
-        if lorsa_reconstruction.ndim == 4:
-            # Lorsa decode returns per-head contributions; sum over heads to match
-            # the attn_out_cache tensor shape (layers x seq_len x d_model).
-            lorsa_reconstruction = lorsa_reconstruction.sum(dim=1)
+        with torch.no_grad():
+            lorsa_reconstruction = torch.stack([
+                self.lorsas[layer].decode(lorsa_activation_matrix[layer])
+                for layer in range(self.cfg.n_layers)
+            ])
+            if lorsa_reconstruction.ndim == 4:
+                lorsa_reconstruction = lorsa_reconstruction.sum(dim=1)
 
+            transcoder_outputs = []
+            for layer in range(self.cfg.n_layers):
+                layer_act = tc_activation_matrix[layer]
+                if isinstance(layer_act, torch.Tensor) and layer_act.layout == torch.sparse_coo:
+                    layer_act = layer_act.to_dense()
+                transcoder_outputs.append(self.transcoders[str(layer)].decode(layer_act))
+            transcoder_reconstruction = torch.stack(transcoder_outputs)
 
-        transcoder_outputs = []
-
-        for layer in range(self.cfg.n_layers):
-            layer_act = tc_activation_matrix[layer]
-            # print(f'{layer_act.shape = }') [64, 16384]
-
-            if isinstance(layer_act, torch.Tensor) and layer_act.layout == torch.sparse_coo:
-                layer_act = layer_act.to_dense()
-
-            # ↓ 如果后面还需要在 decode 前 reshape，方便你继续加逻辑
-            # if layer_act.ndim == 4:
-            #     layer_act = layer_act.reshape(layer_act.shape[0], layer_act.shape[1], -1)
-
-            decoded = self.transcoders[str(layer)].decode(layer_act)
-            transcoder_outputs.append(decoded)
-
-        transcoder_reconstruction = torch.stack(transcoder_outputs)
-
-
-        # transcoder_reconstruction = torch.stack([
-        #     self.transcoders[str(layer)].decode(tc_activation_matrix[layer])
-        #     for layer in range(self.cfg.n_layers)
-        # ])
-        error_vectors[:self.cfg.n_layers] = torch.cat(
-            list(attn_out_cache.values()),
-            dim=0
-        ) - lorsa_reconstruction
-        
-        error_vectors[self.cfg.n_layers:] = torch.cat(
-            list(mlp_out_cache.values()),
-            dim=0
-        ) - transcoder_reconstruction
+            seq_len = transcoder_reconstruction.shape[-2]
+            error_vectors = torch.zeros(
+                [self.cfg.n_layers * 2, seq_len, self.cfg.d_model],
+                device=self.cfg.device,
+                dtype=self.cfg.dtype,
+            )
+            error_vectors[:self.cfg.n_layers] = torch.cat(
+                list(attn_out_cache.values()), dim=0
+            ) - lorsa_reconstruction
+            error_vectors[self.cfg.n_layers:] = torch.cat(
+                list(mlp_out_cache.values()), dim=0
+            ) - transcoder_reconstruction
 
         if zero_bos and isinstance(tokens, torch.Tensor):
             error_vectors[:, 0] = 0
@@ -569,14 +562,9 @@ class ReplacementModel(HookedTransformer):
             lorsa_activation_matrix = lorsa_activation_matrix.coalesce()
             tc_activation_matrix = tc_activation_matrix.coalesce()
 
-        # 从hook_embed获取实际的embedding值
-        with torch.no_grad():
-            # 运行前向传播获取embedding
-            _, cache = self.run_with_cache(tokens, prepend_bos=False)
-            token_vectors = cache['hook_embed'].detach()  # 形状: [batch, seq_len, d_model]
-            # 如果是batch维度，取第一个batch
-            if token_vectors.dim() == 3:
-                token_vectors = token_vectors[0]  # 形状: [seq_len, d_model]
+        token_vectors = embed_cache["hook_embed"].detach()
+        if token_vectors.dim() == 3:
+            token_vectors = token_vectors[0]
 
         return logits, lorsa_activation_matrix, lorsa_attention_pattern, tc_activation_matrix, error_vectors, token_vectors
 

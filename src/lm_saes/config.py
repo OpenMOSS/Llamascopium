@@ -561,10 +561,10 @@ class GraphEvalConfig(BaseConfig):
     desired_logit_prob: float = 0.95
     # Attribution will attribute from the minimum number of logits needed to reach this probability mass (or max_n_logits, whichever is lower)
 
-    max_feature_nodes: int = 1024
+    max_feature_nodes: int = 4096
     # Only attribute from this number of feature nodes, max. Lower is faster, but you will lose more of the graph. None means no limit.
 
-    batch_size: int = 2
+    batch_size: int = 64
     # Batch size when attributing
 
     offload: Literal[None, "disk", "cpu"] = None

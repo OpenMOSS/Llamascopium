@@ -25,6 +25,10 @@ try:
     from .circuit_trace_defaults import (
         DEFAULT_EDGE_THRESHOLD,
         DEFAULT_MAX_FEATURE_NODES,
+        DEFAULT_MIXED_PRECISION_EDGES,
+        DEFAULT_TRACE_BATCH_SIZE,
+        DEFAULT_TRACE_SIDE,
+        DEFAULT_VJP_BATCH_SIZE,
         DEFAULT_NODE_THRESHOLD,
         DEFAULT_SAVE_ACTIVATION_INFO,
     )
@@ -33,6 +37,10 @@ except ImportError:
     from circuit_trace_defaults import (
         DEFAULT_EDGE_THRESHOLD,
         DEFAULT_MAX_FEATURE_NODES,
+        DEFAULT_MIXED_PRECISION_EDGES,
+        DEFAULT_TRACE_BATCH_SIZE,
+        DEFAULT_TRACE_SIDE,
+        DEFAULT_VJP_BATCH_SIZE,
         DEFAULT_NODE_THRESHOLD,
         DEFAULT_SAVE_ACTIVATION_INFO,
     )
@@ -498,6 +506,8 @@ def run_attribution(
     order_mode: str,
     mongo_client: Optional[MongoClient],
     sae_series: str,
+    vjp_batch_size: int = DEFAULT_VJP_BATCH_SIZE,
+    mixed_precision_edges: bool = DEFAULT_MIXED_PRECISION_EDGES,
     act_times_max: Optional[int] = None,
     encoder_demean: bool = False,
     save_activation_info: bool = DEFAULT_SAVE_ACTIVATION_INFO,
@@ -534,6 +544,8 @@ def run_attribution(
         max_n_logits=max_n_logits,
         desired_logit_prob=desired_logit_prob,
         batch_size=batch_size,
+        vjp_batch_size=vjp_batch_size,
+        mixed_precision_edges=mixed_precision_edges,
         max_feature_nodes=max_feature_nodes,
         offload=None,
         update_interval=4,
@@ -727,11 +739,13 @@ def run_circuit_trace(
     tc_base_path: str = BT4_TC_BASE_PATH,
     lorsa_base_path: str = BT4_LORSA_BASE_PATH,
     n_layers: int = 15,
-    side: str = "both",
+    side: str = DEFAULT_TRACE_SIDE,
     max_n_logits: int = 1,
     desired_logit_prob: float = 0.95,
     max_feature_nodes: int = DEFAULT_MAX_FEATURE_NODES,
-    batch_size: int = 1,
+    batch_size: int = DEFAULT_TRACE_BATCH_SIZE,
+    vjp_batch_size: int = DEFAULT_VJP_BATCH_SIZE,
+    mixed_precision_edges: bool = DEFAULT_MIXED_PRECISION_EDGES,
     order_mode: str = "abs",
     mongo_uri: str = "mongodb://localhost:27017",
     mongo_db: str = "mechinterp",
@@ -800,6 +814,8 @@ def run_circuit_trace(
             desired_logit_prob=desired_logit_prob,
             max_feature_nodes=max_feature_nodes,
             batch_size=batch_size,
+            vjp_batch_size=vjp_batch_size,
+            mixed_precision_edges=mixed_precision_edges,
             order_mode=order_mode,
             mongo_client=mongo_client_instance,
             sae_series=sae_series,
@@ -923,7 +939,7 @@ def main():
                        help="FEN")
     parser.add_argument("--move_uci", type=str, default="a2c4",
                        help="UCI move to analyze")
-    parser.add_argument("--side", type=str, default="k", choices=["q", "k", "both"],
+    parser.add_argument("--side", type=str, default=DEFAULT_TRACE_SIDE, choices=["q", "k", "both"],
                        help="Analysis side (q/k/both)")
     parser.add_argument("--max_n_logits", type=int, default=1,
                        help="Maximum logit number")
@@ -931,10 +947,12 @@ def main():
                        help="Desired logit probability")
     parser.add_argument("--max_feature_nodes", type=int, default=DEFAULT_MAX_FEATURE_NODES,
                        help="Maximum feature nodes number")
-    parser.add_argument("--batch_size", type=int, default=1,
+    parser.add_argument("--batch_size", type=int, default=DEFAULT_TRACE_BATCH_SIZE,
                        help="Batch size")
+    parser.add_argument("--vjp_batch_size", type=int, default=DEFAULT_VJP_BATCH_SIZE,
+                       help="Replicated forward/VJP batch size")
     parser.add_argument("--order_mode", type=str, default="abs",
-                       choices=["positive", "negative", "move_pair", "group"],
+                       choices=["abs", "positive", "negative", "move_pair", "group"],
                        help="Sorting mode")
     
     parser.add_argument("--mongo_uri", type=str, default="mongodb://localhost:27017",
@@ -986,6 +1004,7 @@ def main():
             desired_logit_prob=args.desired_logit_prob,
             max_feature_nodes=args.max_feature_nodes,
             batch_size=args.batch_size,
+            vjp_batch_size=args.vjp_batch_size,
             order_mode=args.order_mode,
             mongo_client=mongo_client,
             sae_series=args.sae_series,

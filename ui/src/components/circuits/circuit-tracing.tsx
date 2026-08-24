@@ -68,12 +68,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
 
   const [traceLogs, setTraceLogs] = useState<Array<{timestamp: number; message: string}>>([]);
   const MAX_VISIBLE_LOGS = 100;
-  const LAST_TRACE_REQUEST_KEY = 'circuit_trace_last_request_v1';
-  const TRACE_RESULT_CACHE_KEY = 'circuit_trace_result_cache_v1'; // localStorage key for trace result backup
-
-  const [isRecovering, setIsRecovering] = useState(false);
-  const [lastTraceInfo, setLastTraceInfo] = useState<any>(null);
-  const [showRecoveryButton, setShowRecoveryButton] = useState(false);
   const effectiveGameFen = gameFen;
 
   const safeDecodeFen = useCallback((fen: string): string => {
@@ -99,23 +93,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
     }
   }, []);
 
-  const loadLastTraceRequest = useCallback((): any | null => {
-    try {
-      const raw = localStorage.getItem(LAST_TRACE_REQUEST_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  const saveLastTraceRequest = useCallback((payload: any) => {
-    try {
-      localStorage.setItem(LAST_TRACE_REQUEST_KEY, JSON.stringify(payload));
-    } catch {
-      /* no-op */
-    }
-  }, []);
-  
   const loadCachedPositiveMove = useCallback((fen: string): string => {
     try {
       const raw = localStorage.getItem(POSITIVE_MOVE_CACHE_KEY);
@@ -135,17 +112,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
       return obj[fen] || '';
     } catch {
       return '';
-    }
-  }, []);
-  
-  const saveCachedMove = useCallback((fen: string, move: string) => {
-    try {
-      const raw = localStorage.getItem(MOVE_CACHE_KEY);
-      const obj = raw ? (JSON.parse(raw) as Record<string, string>) : {};
-      obj[fen] = move;
-      localStorage.setItem(MOVE_CACHE_KEY, JSON.stringify(obj));
-    } catch {
-      /* no-op */
     }
   }, []);
   
@@ -180,125 +146,18 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
     clerp?: string;
   }
 
-  // Poll circuit trace logs
-  useEffect(() => {
-    // If not tracing and no logs, don't poll
-    if (!isTracing && traceLogs.length === 0) return;
-
-    let cancelled = false;
-    let pollCount = 0;
-    const MAX_POLL_AFTER_COMPLETE = 5; // After tracing completes, poll 5 more times to ensure all logs are retrieved
-
-    const poll = async () => {
-      try {
-        const params = new URLSearchParams({
-          model_name: "lc0/BT4-1024x15x32h",
-          fen: effectiveGameFen,
-        });
-        const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace/logs?${params.toString()}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled) {
-          const allLogs = data.logs ?? [];
-          // Only keep the last MAX_VISIBLE_LOGS logs
-          const sliced = allLogs.slice(-MAX_VISIBLE_LOGS);
-          setTraceLogs(sliced);
-          
-          // If tracing is complete and has polled enough times, stop polling
-          if (!isTracing && !data.is_tracing) {
-            pollCount++;
-            if (pollCount >= MAX_POLL_AFTER_COMPLETE) {
-              cancelled = true;
-            }
-          } else {
-            pollCount = 0; // Reset count
-          }
-        }
-      } catch (err) {
-        console.error("Failed to fetch circuit trace logs:", err);
-      }
-    };
-
-    // Immediately execute once, then start polling
-    poll();
-    const timer = window.setInterval(() => {
-      if (!cancelled) {
-        poll();
-      } else {
-        window.clearInterval(timer);
-      }
-    }, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [isTracing, effectiveGameFen, traceLogs.length]);
-
-  // Save trace result to localStorage as backup
-  const saveTraceResultToLocalStorage = useCallback((traceKey: string, result: any) => {
-    try {
-      const cacheData = {
-        trace_key: traceKey,
-        result: result,
-        saved_at: Date.now(),
-      };
-      localStorage.setItem(TRACE_RESULT_CACHE_KEY, JSON.stringify(cacheData));
-      console.log('Trace result backed up to localStorage');
-    } catch (error) {
-      console.error('⚠️ Failed to save trace result to localStorage:', error);
-      // localStorage may be full, try to clean old data
-      try {
-        localStorage.removeItem(TRACE_RESULT_CACHE_KEY);
-        localStorage.setItem(TRACE_RESULT_CACHE_KEY, JSON.stringify({
-          trace_key: traceKey,
-          result: result,
-          saved_at: Date.now(),
-        }));
-      } catch (e) {
-        console.error('⚠️ Still failed to save to localStorage:', e);
-      }
-    }
-  }, []);
-
-  // Load trace result from localStorage
-  const loadTraceResultFromLocalStorage = useCallback((traceKey: string): any | null => {
-    try {
-      const cached = localStorage.getItem(TRACE_RESULT_CACHE_KEY);
-      if (!cached) return null;
-      
-      const cacheData = JSON.parse(cached);
-      // Check if it matches the current trace_key and is not older than 7 days
-      if (cacheData.trace_key === traceKey && 
-          Date.now() - cacheData.saved_at < 7 * 24 * 3600 * 1000) {
-        return cacheData.result;
-      }
-      return null;
-    } catch (error) {
-      console.error('⚠️ Failed to load trace result from localStorage:', error);
-      return null;
-    }
-  }, []);
-
-  // New: handleCircuitTrace function
-  const handleCircuitTraceResult = useCallback((result: any, traceKey?: string) => {
+  const handleCircuitTraceResult = useCallback((result: any) => {
     if (result && result.nodes) {
       try {
         const transformedData = transformCircuitData(result);
         setCircuitVisualizationData(transformedData);
         setCircuitTraceResult(result);
-        // After successful load, hide recovery button
-        setShowRecoveryButton(false);
-        
-        // Save to localStorage as backup
-        if (traceKey) {
-          saveTraceResultToLocalStorage(traceKey, result);
-        }
       } catch (error) {
         console.error('Circuit data conversion failed:', error);
         alert('Circuit data conversion failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
       }
     }
-  }, [saveTraceResultToLocalStorage]);
+  }, []);
 
   // New: handle node click - fix parameter passing
   const handleNodeClick = useCallback((node: any, isMetaKey: boolean) => {
@@ -357,160 +216,14 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
       }
       setMoveError('');
       return true;
-    } catch (error) {
+    } catch (_error) {
       setMoveError('Move validation failed');
       return false;
     }
   }, []);
 
-  const generateTraceKey = useCallback((fen: string, moveUci: string, saeComboId: string | null | undefined): string => {
-    const modelName = 'lc0/BT4-1024x15x32h';
-    const comboId = saeComboId || 'k_30_e_16';
-    const decodedFen = safeDecodeFen(fen);
-    const decodedMove = safeDecodeFen(moveUci);
-    return `${modelName}::${comboId}::${decodedFen}::${decodedMove}`;
-  }, [safeDecodeFen]);
-
-  const fetchExistingTraceResult = useCallback(
-    async (fen: string, moveUci: string, saeComboId: string | null | undefined, showSuccess: boolean = false) => {
-      const decodedFen = safeDecodeFen(fen);
-      const decodedMove = safeDecodeFen(moveUci);
-      const traceKey = generateTraceKey(decodedFen, decodedMove, saeComboId);
-      
-      const cachedResult = loadTraceResultFromLocalStorage(traceKey);
-      if (cachedResult && cachedResult.nodes) {
-        console.log('Recover trace result from localStorage');
-        handleCircuitTraceResult(cachedResult, traceKey);
-        if (showSuccess) {
-          alert(`Successfully recovered Circuit trace result from localStorage!\n\nNode count: ${cachedResult.nodes.length}\nLink count: ${cachedResult.links?.length || 0}`);
-        }
-        return true;
-      }
-      
-      // Try to load from backend
-      try {
-        const params = new URLSearchParams({
-          fen: decodedFen,
-          move_uci: decodedMove,
-        });
-        if (saeComboId) {
-          params.set('sae_combo_id', saeComboId);
-        }
-        const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace/result?${params.toString()}`);
-        if (!res.ok) {
-          if (showSuccess) {
-            throw new Error(`HTTP ${res.status}: ${await res.text()}`);
-          }
-          return false;
-        }
-        const data = await res.json();
-        if (data?.graph_data?.nodes) {
-          handleCircuitTraceResult(data.graph_data, traceKey);
-          if (data.logs) {
-            const sliced = (data.logs as Array<{ timestamp: number; message: string }>)?.slice(-MAX_VISIBLE_LOGS) || [];
-            setTraceLogs(sliced);
-          }
-          if (showSuccess) {
-            alert(`Successfully recovered Circuit trace result from backend!\n\nNode count: ${data.graph_data.nodes.length}\nLink count: ${data.graph_data.links?.length || 0}`);
-          }
-          return true;
-        }
-        return false;
-      } catch (err) {
-        console.error('Failed to recover trace result:', err);
-        if (showSuccess) {
-          alert(`Failed to recover: ${err instanceof Error ? err.message : 'Unknown error'}`);
-        }
-        return false;
-      }
-    },
-    [handleCircuitTraceResult, generateTraceKey, loadTraceResultFromLocalStorage, safeDecodeFen],
-  );
-
-  // Manually recover the last trace result
-  const handleManualRecovery = useCallback(async () => {
-    const lastRequest = loadLastTraceRequest();
-    if (!lastRequest || !lastRequest.fen || !lastRequest.move_uci) {
-      alert('No trace request information found to recover');
-      return;
-    }
-
-    setIsRecovering(true);
-    try {
-      console.log('Manually recover trace result:', lastRequest);
-      const success = await fetchExistingTraceResult(
-        safeDecodeFen(lastRequest.fen), 
-        safeDecodeFen(lastRequest.move_uci), 
-        lastRequest.sae_combo_id,
-        true // Show success/failure messages
-      );
-      
-      if (!success) {
-        // If there is no existing result, check if it is still tracing
-        try {
-          const params = new URLSearchParams({
-            model_name: 'lc0/BT4-1024x15x32h',
-            fen: safeDecodeFen(lastRequest.fen),
-            move_uci: safeDecodeFen(lastRequest.move_uci),
-          });
-          if (lastRequest.sae_combo_id) params.set('sae_combo_id', lastRequest.sae_combo_id);
-          
-          const statusRes = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace/logs?${params.toString()}`);
-          if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.is_tracing) {
-              alert('Backend is executing this trace request. Please wait for it to finish and try again.');
-              // Start polling logs
-              const sliced = (statusData.logs as Array<{ timestamp: number; message: string }>)?.slice(-MAX_VISIBLE_LOGS) || [];
-              setTraceLogs(sliced);
-            } else {
-              alert('❌ Could not find a matching trace result; it may have expired or been cleaned up.');
-            }
-          } else {
-            alert('❌ Unable to check trace status; please run a new trace.');
-          }
-        } catch (statusErr) {
-          console.error('Failed to check trace status:', statusErr);
-          alert('❌ Failed to check trace status; please run a new trace.');
-        }
-      }
-    } catch (error) {
-      console.error('Manual recovery failed:', error);
-      alert(`❌ Recovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setIsRecovering(false);
-    }
-  }, [loadLastTraceRequest, fetchExistingTraceResult, safeDecodeFen]);
-
-  // Check whether there is a recoverable trace
-  const checkRecoverableTrace = useCallback(() => {
-    const lastRequest = loadLastTraceRequest();
-    if (lastRequest && lastRequest.fen && lastRequest.move_uci) {
-      setLastTraceInfo(lastRequest);
-      setShowRecoveryButton(true);
-    } else {
-      setLastTraceInfo(null);
-      setShowRecoveryButton(false);
-    }
-  }, [loadLastTraceRequest]);
-
-  // Main circuit trace handler supporting different order_mode values including "both"
+  // Start one trace request and use its response as the result.
   const handleCircuitTrace = useCallback(async (orderMode: 'positive' | 'negative' | 'both' = 'positive') => {
-    // First check whether the backend is already running another circuit tracing job
-    try {
-      const statusResponse = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace/status`);
-      if (statusResponse.ok) {
-        const status = await statusResponse.json();
-        if (status.is_tracing) {
-          alert('The backend is currently running another circuit tracing job. Please wait for it to finish and try again.');
-          return;
-        }
-      }
-    } catch (error) {
-      console.error('Failed to check circuit tracing status:', error);
-      // If the status check fails, still proceed (avoid blocking the user due to network issues)
-    }
-    
     let moveUci: string | null = null;
     const decodedFen = safeDecodeFen(effectiveGameFen);
     const lastMoveStr: string | null = lastMove ? lastMove : null;
@@ -617,13 +330,11 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
     }
     
     onCircuitTraceStart?.();
-    
-    // Clear previous logs
     setTraceLogs([]);
-    
+
+    let logPollTimer: number | undefined;
+    let pollLogs: (() => Promise<void>) | undefined;
     try {
-      // Always use the BT4 model (modelName is used inside generateTraceKey)
-      
       // Get the currently selected SAE combo ID (read from localStorage, consistent with SaeComboLoader)
       const LOCAL_STORAGE_KEY = "bt4_sae_combo_id";
       const currentSaeComboId = window.localStorage.getItem(LOCAL_STORAGE_KEY) || null;
@@ -663,23 +374,38 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
         'current SAE combo ID': currentSaeComboId,
       });
 
-      saveLastTraceRequest({
+      const logParams = new URLSearchParams({
+        model_name: 'lc0/BT4-1024x15x32h',
         fen: decodedFen,
         move_uci: requestBody.move_uci,
-        order_mode: orderMode,
-        side: requestBody.side,
-        sae_combo_id: currentSaeComboId,
-        timestamp: Date.now(), // Add timestamp
       });
-      
-      const response = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace`, {
+      if (currentSaeComboId) logParams.set('sae_combo_id', currentSaeComboId);
+      pollLogs = async () => {
+        try {
+          const response = await fetch(
+            `${import.meta.env.VITE_BACKEND_URL}/circuit_trace/logs?${logParams.toString()}`,
+          );
+          if (!response.ok) return;
+          const data = await response.json();
+          setTraceLogs((data.logs ?? []).slice(-MAX_VISIBLE_LOGS));
+        } catch (error) {
+          console.error('Failed to fetch circuit trace logs:', error);
+        }
+      };
+
+      // Start the trace first. Polling is scoped to this exact request and ends
+      // as soon as the synchronous trace response completes.
+      const traceRequest = fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
       });
-      
+      logPollTimer = window.setInterval(() => void pollLogs?.(), 1000);
+      const response = await traceRequest;
+      await pollLogs();
+
       if (response.ok) {
         const data = await response.json();
         // Cache moves on success
@@ -706,9 +432,7 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
           });
         }
         
-        // Generate trace_key and save result
-        const traceKey = generateTraceKey(effectiveGameFen, requestBody.move_uci, currentSaeComboId);
-        handleCircuitTraceResult(data, traceKey);
+        handleCircuitTraceResult(data);
       } else {
         const errorText = await response.text();
         console.error('Circuit trace API call failed:', response.status, response.statusText, errorText);
@@ -717,34 +441,12 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
     } catch (error) {
       console.error('Circuit trace error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
-      // Check whether this is a network error
-      const isNetworkError = errorMessage.toLowerCase().includes('fetch') || 
-                            errorMessage.toLowerCase().includes('network') ||
-                            errorMessage.toLowerCase().includes('connection');
-      
-      if (isNetworkError) {
-        const shouldRecover = confirm(
-          `❌ Circuit trace encountered a network error: ${errorMessage}\n\n` +
-          `💡 Possible actions:\n` +
-          `1. Click "OK" to try to recover the last trace result\n` +
-          `2. Click "Cancel" to run a new trace\n\n` +
-          `Would you like to try recovering the last result?`
-        );
-        
-        if (shouldRecover) {
-          // Wait a bit before recovering, to give the backend time to finish processing
-          setTimeout(() => {
-            handleManualRecovery();
-          }, 2000);
-        }
-      } else {
-        alert('Circuit trace failed: ' + errorMessage);
-      }
+      alert('Circuit trace failed: ' + errorMessage);
     } finally {
+      if (logPollTimer !== undefined) window.clearInterval(logPollTimer);
       onCircuitTraceEnd?.();
     }
-  }, [gameFen, currentFen, lastMove, gameHistory, positiveMove, negativeMove, validateMove, onCircuitTraceStart, onCircuitTraceEnd, handleCircuitTraceResult, circuitParams, traceSide, loadCachedMove, saveCachedMove, loadCachedPositiveMove, loadCachedNegativeMove, saveCachedPositiveMove, saveCachedNegativeMove, handleManualRecovery, generateTraceKey, safeDecodeFen]);
+  }, [effectiveGameFen, gameFen, lastMove, positiveMove, negativeMove, validateMove, onCircuitTraceStart, onCircuitTraceEnd, handleCircuitTraceResult, circuitParams, traceSide, loadCachedMove, loadCachedPositiveMove, loadCachedNegativeMove, saveCachedPositiveMove, saveCachedNegativeMove, safeDecodeFen]);
 
   // Save raw graph JSON (same structure as backend create_graph_files)
   const handleSaveGraphJson = useCallback(() => {
@@ -777,69 +479,7 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
       console.error('Failed to save JSON:', error);
       alert('Failed to save JSON');
     }
-  }, [circuitTraceResult, circuitVisualizationData, gameFen, gameHistory]);
-
-  useEffect(() => {
-    const last = loadLastTraceRequest();
-    if (!last || !last.fen || !last.move_uci) return;
-
-    let cancelled = false;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 30;
-
-    const pollExisting = async () => {
-      if (cancelled) return;
-      try {
-        const params = new URLSearchParams({
-          model_name: 'lc0/BT4-1024x15x32h',
-          fen: safeDecodeFen(last.fen),
-          move_uci: safeDecodeFen(last.move_uci),
-        });
-        if (last.sae_combo_id) params.set('sae_combo_id', last.sae_combo_id);
-        const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/circuit_trace/logs?${params.toString()}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const sliced = (data.logs as Array<{ timestamp: number; message: string }>)?.slice(-MAX_VISIBLE_LOGS) || [];
-        setTraceLogs(sliced);
-
-        if (!data.is_tracing) {
-          await fetchExistingTraceResult(last.fen, last.move_uci, last.sae_combo_id);
-          cancelled = true;
-          return;
-        }
-      } catch (err) {
-        console.error('Failed to recover trace logs:', err);
-      }
-      attempts += 1;
-      if (attempts >= MAX_ATTEMPTS) cancelled = true;
-    };
-
-    pollExisting();
-    const timer = window.setInterval(() => {
-      if (!cancelled) {
-        pollExisting();
-      } else {
-        window.clearInterval(timer);
-      }
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [loadLastTraceRequest, fetchExistingTraceResult, safeDecodeFen]);
-
-  // On mount, check whether there is a recoverable trace
-  useEffect(() => {
-    checkRecoverableTrace();
-  }, [checkRecoverableTrace]);
-
-  // When FEN changes, re-check whether there is a recoverable trace
-  useEffect(() => {
-    if (effectiveGameFen) {
-      checkRecoverableTrace();
-    }
-  }, [effectiveGameFen, checkRecoverableTrace]);
+  }, [circuitTraceResult, circuitVisualizationData, effectiveGameFen, gameHistory]);
 
   // Handle parameter changes
   const handleParamsChange = useCallback((key: keyof typeof circuitParams, value: string) => {
@@ -1361,27 +1001,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
           <CardTitle className="flex items-center justify-between">
             <span>Circuit Trace Analysis</span>
             <div className="flex gap-2">
-              {showRecoveryButton && (
-                <Button
-                  onClick={handleManualRecovery}
-                  disabled={isRecovering}
-                  variant="outline"
-                  size="sm"
-                  className="bg-yellow-50 border-yellow-300 text-yellow-800 hover:bg-yellow-100"
-                  title={lastTraceInfo ? `Recover last trace: ${lastTraceInfo.move_uci} (${new Date(lastTraceInfo.timestamp || 0).toLocaleTimeString()})` : 'Recover last trace result'}
-                >
-                  {isRecovering ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Recovering...
-                    </>
-                  ) : (
-                    <>
-                      🔄 Recover Result
-                    </>
-                  )}
-                </Button>
-              )}
               <Button
                 onClick={() => setShowParamsDialog(true)}
                 variant="outline"
@@ -1447,11 +1066,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
                 <span>
                   {isTracing ? '🔍 Circuit Tracing Logs' : '📋 Circuit Tracing Logs (completed)'}
                 </span>
-                {!isTracing && traceLogs.length > 0 && !circuitVisualizationData && (
-                  <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-                    💡 If no result is displayed, click the "🔄 Recover Result" button above.
-                  </span>
-                )}
               </div>
               <div className="max-h-40 overflow-y-auto rounded bg-blue-100 p-2 text-xs font-mono leading-relaxed">
                 {traceLogs.length === 0 ? (
@@ -1638,34 +1252,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
               </div>
             )}
 
-            {/* Show last trace info (only when recovery is available and no current visualization) */}
-            {showRecoveryButton && lastTraceInfo && !circuitVisualizationData && (
-              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium text-yellow-800">💾 Found a previous trace record</span>
-                  <span className="text-xs text-yellow-600">
-                    {lastTraceInfo.timestamp ? new Date(lastTraceInfo.timestamp).toLocaleString() : 'Time unknown'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-yellow-700">
-                  <div>
-                    <span className="font-medium">FEN:</span>
-                    <div className="font-mono bg-yellow-100 p-1 rounded mt-1 break-all">
-                      {lastTraceInfo.fen}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="font-medium">Move:</span>
-                    <div className="font-mono bg-yellow-100 p-1 rounded mt-1">
-                      {lastTraceInfo.move_uci} ({lastTraceInfo.order_mode} mode, {lastTraceInfo.side} side)
-                    </div>
-                  </div>
-                </div>
-                <div className="text-xs text-yellow-600 mt-2 text-center">
-                  Click the "🔄 Recover Result" button above to try to restore this trace visualization.
-                </div>
-              </div>
-            )}
           </div>
         </CardContent>
       </Card>
@@ -1694,8 +1280,6 @@ export const CircuitTracing: React.FC<CircuitTracingProps> = ({
                     setHiddenNodeIds([]);
                     setSelectedFeature(null);
                     setConnectedFeatures([]);
-                    // After clearing visualization, re-check whether recovery is available
-                    checkRecoverableTrace();
                   }}
                   variant="outline"
                   size="sm"

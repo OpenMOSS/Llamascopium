@@ -160,7 +160,9 @@ class Graph:
 
 
 def normalize_matrix(matrix: torch.Tensor) -> torch.Tensor:
-    normalized = matrix.abs()
+    # Edge storage may use BF16/FP16 during attribution. Influence propagation
+    # needs FP32 both for dtype compatibility and stable row normalization.
+    normalized = matrix.float().abs()
     return normalized / normalized.sum(dim=1, keepdim=True).clamp(min=1e-10)
 
 
@@ -170,6 +172,9 @@ def compute_influence(A: torch.Tensor, logit_weights: torch.Tensor, max_iter: in
     # But it's faster / more efficient to compute logit_weights @ A + logit_weights @ A^2
     # as follows:
 
+    if A.dtype in (torch.float16, torch.bfloat16):
+        A = A.float()
+    logit_weights = logit_weights.to(device=A.device, dtype=A.dtype)
     current_influence = logit_weights @ A
     influence = current_influence
     iterations = 0
@@ -248,7 +253,9 @@ def compute_graph_scores(graph: Graph, use_lorsa:bool=True) -> tuple[float, floa
     print(f'{n_features = }, {error_end_idx = }, {token_end_idx = }')
 
     logit_weights = torch.zeros(
-        graph.adjacency_matrix.shape[0], device=graph.adjacency_matrix.device
+        graph.adjacency_matrix.shape[0],
+        device=graph.adjacency_matrix.device,
+        dtype=torch.float32,
     )
     logit_weights[-n_logits:] = graph.logit_probabilities
 
@@ -304,7 +311,9 @@ def prune_graph(
     n_features = len(graph.selected_features)  # now refers to TC features only
     
     logit_weights = torch.zeros(
-        graph.adjacency_matrix.shape[0], device=graph.adjacency_matrix.device
+        graph.adjacency_matrix.shape[0],
+        device=graph.adjacency_matrix.device,
+        dtype=torch.float32,
     )
     # print(f'{logit_weights = }')
     # print(f'{n_logits = }')

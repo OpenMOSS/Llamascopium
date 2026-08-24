@@ -319,9 +319,15 @@ def extract_activation_info(graph: Graph) -> List[ActivationInfo] | None:
 def create_used_nodes_and_edges(graph: Graph, nodes, edge_mask):
     """Filter to only used nodes and create edges."""
     start_time = time.time()
-    edges = edge_mask.cpu().numpy()
-    dsts, srcs = edges.nonzero()
-    weights = graph.adjacency_matrix.cpu().numpy()[dsts, srcs].tolist()
+    edge_indices = edge_mask.nonzero(as_tuple=False)
+    dsts = edge_indices[:, 0].cpu().tolist()
+    srcs = edge_indices[:, 1].cpu().tolist()
+    weights = (
+        graph.adjacency_matrix[edge_indices[:, 0], edge_indices[:, 1]]
+        .float()
+        .cpu()
+        .tolist()
+    )
 
     used_edges = [
         {

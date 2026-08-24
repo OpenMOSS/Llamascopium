@@ -36,6 +36,10 @@ try:
     from .circuit_trace_defaults import (
         DEFAULT_EDGE_THRESHOLD,
         DEFAULT_MAX_FEATURE_NODES,
+        DEFAULT_TRACE_BATCH_SIZE,
+        DEFAULT_TRACE_SIDE,
+        DEFAULT_VJP_BATCH_SIZE,
+        DEFAULT_MIXED_PRECISION_EDGES,
         DEFAULT_NODE_THRESHOLD,
         DEFAULT_SAVE_ACTIVATION_INFO,
     )
@@ -51,6 +55,10 @@ except ImportError:
     from circuit_trace_defaults import (
         DEFAULT_EDGE_THRESHOLD,
         DEFAULT_MAX_FEATURE_NODES,
+        DEFAULT_TRACE_BATCH_SIZE,
+        DEFAULT_TRACE_SIDE,
+        DEFAULT_VJP_BATCH_SIZE,
+        DEFAULT_MIXED_PRECISION_EDGES,
         DEFAULT_NODE_THRESHOLD,
         DEFAULT_SAVE_ACTIVATION_INFO,
     )
@@ -3277,13 +3285,17 @@ def circuit_trace(request: dict):
             if negative_move_uci:
                 negative_move_uci = _decode_fen(negative_move_uci)  # negative_move_uci may also be encoded
             
-            side = request.get("side", "k")
+            side = request.get("side", DEFAULT_TRACE_SIDE)
             max_feature_nodes = request.get("max_feature_nodes", DEFAULT_MAX_FEATURE_NODES)
             node_threshold = request.get("node_threshold", DEFAULT_NODE_THRESHOLD)
             edge_threshold = request.get("edge_threshold", DEFAULT_EDGE_THRESHOLD)
             max_n_logits = request.get("max_n_logits", 1)
             desired_logit_prob = request.get("desired_logit_prob", 0.95)
-            batch_size = request.get("batch_size", 1)
+            batch_size = request.get("batch_size", DEFAULT_TRACE_BATCH_SIZE)
+            vjp_batch_size = request.get("vjp_batch_size", DEFAULT_VJP_BATCH_SIZE)
+            mixed_precision_edges = request.get(
+                "mixed_precision_edges", DEFAULT_MIXED_PRECISION_EDGES
+            )
             order_mode = request.get("order_mode", "abs")
             encoder_demean = request.get("encoder_demean", False)
             save_activation_info = request.get("save_activation_info", DEFAULT_SAVE_ACTIVATION_INFO)
@@ -3454,6 +3466,8 @@ def circuit_trace(request: dict):
                     max_n_logits=max_n_logits,
                     desired_logit_prob=desired_logit_prob,
                     batch_size=batch_size,
+                    vjp_batch_size=vjp_batch_size,
+                    mixed_precision_edges=mixed_precision_edges,
                     order_mode=order_mode,
                     encoder_demean=encoder_demean,
                     save_activation_info=save_activation_info,

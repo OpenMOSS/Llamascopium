@@ -119,15 +119,6 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --master_port=29910 --nproc_per_node=4 exp
 CUDA_VISIBLE_DEVICES=1 torchrun --master_port=29910 --nproc_per_node=1 exp/card_occupy.py 
 CUDA_VISIBLE_DEVICES=0 torchrun --master_port=29910 --nproc_per_node=1 exp/card_occupy.py 
 
-while true; do
-    echo "Sleeping 3 hours..."
-    sleep 3h
-
-    echo "Running torchrun for 10 minutes..."
-    timeout 10m CUDA_VISIBLE_DEVICES=3,2,1,0 \
-        torchrun --master_port=29910 --nproc_per_node=4 exp/card_occupy.py
-done
-
 
 rsync -a --delete /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs/activations_lc0/empty \
       /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs/activations_lc0/clt/
@@ -207,98 +198,6 @@ CUDA_VISIBLE_DEVICES=4 torchrun --master_port=30000 --nproc-per-node=1 exp/analy
 
 
 
-
-
-
-
-
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 7 14); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L"
-done
-
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 8 14); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=1 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L" 
-done
-
-
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 0 3); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=1 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L" \
-    > "$LOGDIR/analyse_tc_layer_${L}.log" 2>&1
-done
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 4 7); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L" \
-    > "$LOGDIR/analyse_tc_layer_${L}.log" 2>&1
-done
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 8 11); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=0 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L" \
-    > "$LOGDIR/analyse_tc_layer_${L}.log" 2>&1
-done
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-
-for L in $(seq 12 14); do
-  echo "===> layer $L"
-  CUDA_VISIBLE_DEVICES=1 torchrun --nproc_per_node=1 --master_port=$((29440+L)) \
-    exp/analyze_lc0_tc.py --layer "$L" \
-    > "$LOGDIR/analyse_tc_layer_${L}.log" 2>&1
-done
-
-
-cd /inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs
-. .venv/bin/activate   
-LOGDIR="$(pwd)/logs"
-mkdir -p "$LOGDIR"
-for L in 8 14; do
-  echo "===> layer $L"
-  WANDB_MODE=offline WANDB_CONSOLE=off CUDA_VISIBLE_DEVICES=5 torchrun --nproc-per-node=1 --master-port=$((29440+L)) \
-    exp/train_tc_BT4.py --lr 2e-3 --layer "$L" --k 30 --exp_factor 16 \
-    > "$LOGDIR/layer_${L}.log" 2>&1
-done
-
-
 CUDA_VISIBLE_DEVICES=0 torchrun --master_port=30000 --nproc-per-node=1 exp/analyze_lc0_tc.py --layer 14
 CUDA_VISIBLE_DEVICES=0 torchrun --master_port=30000 --nproc-per-node=1 exp/analyze_lc0_tc.py --layer 0
 # analyze lorsa
@@ -311,175 +210,22 @@ CUDA_VISIBLE_DEVICES=1 CUDA_LAUNCH_BLOCKING=1 torchrun --standalone --max_restar
 # eval lorsa
 CUDA_VISIBLE_DEVICES=1 torchrun --master_port=30010 --nproc-per-node=1 exp/eval_lc0_lorsa.py --layer 0
 
-# 删mongo
-db.analyses.deleteOne({"sae_name":"lc0-test-L0-35-master"})
-db.analyses.deleteOne({"sae_name":"lc0-test-L6-35-master"})
-db.analyses.deleteOne({"sae_name":"lc0-test-L14-35-master"})
-db.analyses.deleteOne({"sae_name":"lc0-test-L0-35-master-exp16"})
-db.analyses.deleteOne({"sae_name":"lc0_L14M_16x_k30_lr2e-03_auxk_sparseadam"})
-db.analyses.deleteOne({"sae_name":"lc0-test-L14-35-master-exp16"})
 
-db.analyses.deleteOne({"sae_name":"BT4_tc_L0M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L1M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L2M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L3M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L4M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L5M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L6M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L7M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L8M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L9M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L10M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L11M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L12M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L13M"})
-db.analyses.deleteOne({"sae_name":"BT4_tc_L14M"})
+# pytest
+RUN_BT4_GPU_TESTS=1 \
+  BT4_TC_BASE_PATH="result_BT4/tc/k_30_e_16" \
+  BT4_LORSA_BASE_PATH="result_BT4/lorsa/k_30_e_16" \
+  BT4_GPU_MAX_FEATURE_NODES=4096 \
+  BT4_GPU_VJP_BATCH_SIZE=64 \
+  uv run pytest -q -s tests/integration/test_attribution_qk_gpu.py
 
-db.features.deleteMany({"sae_name":"lc0-test-L0-35-master"})
-db.features.deleteMany({"sae_name":"lc0-test-L6-35-master"})
-db.features.deleteMany({"sae_name":"lc0-test-L14-35-master"})
-db.features.deleteMany({"sae_name":"lc0-test-L0-35-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L6-35-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L14-35-master-exp16"})
-
-db.features.deleteOne({"sae_name":"BT4_tc_L0M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L1M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L2M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L3M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L4M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L5M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L6M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L7M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L8M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L9M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L10M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L11M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L12M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L13M"})
-db.features.deleteOne({"sae_name":"BT4_tc_L14M"})
-
-db.features.deleteMany({"sae_name":"lc0-test-L0-9-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L0-5-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L7-9-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L7-15-master-exp16"})
-db.features.deleteMany({"sae_name":"lc0-test-L14-15-master-exp16-bdgm"})
-db.features.deleteMany({"sae_name":"lc0-test-L0-15-master-exp16"})
+RUN_BT4_GPU_TESTS=1 \
+  BT4_TC_BASE_PATH="result_BT4/tc/k_30_e_16" \
+  BT4_LORSA_BASE_PATH="result_BT4/lorsa/k_30_e_16" \
+  BT4_GPU_MAX_FEATURE_NODES=4096 \
+  BT4_GPU_VJP_BATCH_SIZE=64 \
+  uv run pytest -q -s tests/integration/test_attribution_qk_gpu.py
 
 
-db.features.deleteMany({"sae_name":"lc0-L7-8x-k20-lr2e-03-d_feature256-svd-auxk-sparseadam"})
-db.analyses.deleteMany({"sae_name":"lc0-L7-8x-k20-lr2e-03-d_feature256-svd-auxk-sparseadam"})
-db.features.deleteMany({"sae_name":"lc0_L14M_16x_k30_lr2e-03_auxk_sparseadam"})
-db.analyses.deleteMany({"sae_name":"lc0_L14M_16x_k30_lr2e-03_auxk_sparseadam"})
-db.features.findOne({"sae_name":"lc0_L3M_16x_k30_lr2e-03_auxk_sparseadam"})
-db.features.findOne({ index: 2, sae_name: "lc0_L3M_16x_k30_lr2e-03_auxk_sparseadam" })
-
-db.analyses.deleteMany({"sae_name":"lc0_L14M_16x_k30_lr2e-03_auxk_sparseadam"})
-db.features.deleteMany({"sae_name":"lc0-lorsa-L5-test"})
-
-db.analyses.find({"sae_name":"lc0-lorsa-L5"})
-db.features.find({"sae_name":"lc0-lorsa-L5"})
-
-db.features.find({"sae_name":"BT4_lorsa_L2A"})
-
-db.analyses.find({"sae_series":"BT4-exp128"})
-
-
-db.analyses.deleteMany({
-  sae_name: "lc0_L5M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-db.features.deleteMany({
-  sae_name: "lc0_L5M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-db.analyses.deleteMany({
-  sae_name: "lc0_L6M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-db.features.deleteMany({
-  sae_name: "lc0_L6M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-db.analyses.deleteMany({
-  sae_name: "lc0_L7M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-db.features.deleteMany({
-  sae_name: "lc0_L7M_16x_k30_lr2e-03_auxk_sparseadam",
-  sae_series: "BT4-exp128"
-})
-
-db.analyses.deleteMany({
-  sae_name: "BT4_lorsa_L10A",
-  sae_series: "BT4-exp128"
-})
-db.features.deleteMany({
-  sae_name: "BT4_lorsa_L10A",
-  sae_series: "BT4-exp128"
-})
-
-db.analyses.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `lc0-lorsa-L${i}`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-db.features.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `lc0-lorsa-L${i}`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-
-db.analyses.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_lorsa_L${i}A`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-db.features.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_lorsa_L${i}A`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-db.analyses.find({"sae_series": "BT4-exp128"})
-
-
-
-
-
-
-
-db.analyses.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_lorsa_L${i}A_k30_e128`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-db.features.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_lorsa_L${i}A_k30_e128`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-
-db.analyses.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_tc_L${i}M_k30_e128`)
-  },
-  sae_series: "BT4-exp128"
-});
-
-db.features.deleteMany({
-  sae_name: {
-    $in: Array.from({length: 15}, (_, i) => `BT4_tc_L${i}M_k30_e128`)
-  },
-  sae_series: "BT4-exp128"
-});
+uv run pytest -q -s \
+    tests/unit/test_attribution_qk_fast.py::test_graph_influence_promotes_mixed_precision_edges_to_float32

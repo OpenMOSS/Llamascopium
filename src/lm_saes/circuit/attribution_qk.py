@@ -101,21 +101,25 @@ class AttributionContext:
         # add policy head's q and k activations cache
         self._policy_q_activations: torch.Tensor | None = None
         self._policy_k_activations: torch.Tensor | None = None
+        self._embed_activation: torch.Tensor | None = None
+        self._attn_output_activations: List[torch.Tensor | None] = [None] * n_layers
+        self._mlp_output_activations: List[torch.Tensor | None] = [None] * n_layers
         # (row_size, batch_size, 1)
         self._batch_buffer: torch.Tensor | None = None
         self.n_layers: int = n_layers
+        self.n_pos: int = n_pos
+        self._lorsa_activation_matrix = lorsa_activation_matrix
+        self._tc_activation_matrix = tc_activation_matrix
+        self._error_vectors = error_vectors
+        self._token_vectors = token_vectors
+        self._lorsa_decoder_vecs = lorsa_decoder_vecs
+        self._tc_decoder_vecs = tc_decoder_vecs
+        self._attn_output_hook = attn_output_hook
+        self._mlp_output_hook = mlp_output_hook
 
-        # Assemble all backward hooks up-front
-        self._attribution_hooks = self._make_attribution_hooks(
-            lorsa_activation_matrix,
-            tc_activation_matrix,
-            error_vectors,
-            token_vectors,
-            lorsa_decoder_vecs,
-            tc_decoder_vecs,
-            attn_output_hook,
-            mlp_output_hook
-        )
+        # The fast path uses live tensor references with ``autograd.grad``.
+        # Legacy hook closures are created only if ``install_hooks`` is called.
+        self._attribution_hooks: List[Tuple[str, Callable]] | None = None
         
         total_active_feats = lorsa_activation_matrix._nnz() + tc_activation_matrix._nnz()
         # total_active_feats + error_vectors + token_vectors
@@ -166,6 +170,284 @@ class AttributionContext:
         hooks.append(("policy_head.hook_k", _cache_k))
 
         return hooks
+
+    def _live_caching_hooks(
+        self,
+        attn_input_hook: str,
+        mlp_input_hook: str,
+    ) -> List[Tuple[str, Callable]]:
+        """Cache live tensors used by batched VJPs without backward hooks."""
+
+        hooks = self._caching_hooks(attn_input_hook, mlp_input_hook)
+        proxy = weakref.proxy(self)
+
+        def _cache_embed(acts: torch.Tensor, hook: HookPoint) -> torch.Tensor:
+            if not acts.requires_grad:
+                acts = acts.detach().requires_grad_()
+            proxy._embed_activation = acts
+            return acts
+
+        def _cache_attn(acts: torch.Tensor, hook: HookPoint, *, layer: int) -> torch.Tensor:
+            if not acts.requires_grad:
+                acts = acts.detach().requires_grad_()
+            proxy._attn_output_activations[layer] = acts
+            return acts
+
+        def _cache_mlp(acts: torch.Tensor, hook: HookPoint, *, layer: int) -> torch.Tensor:
+            if not acts.requires_grad:
+                acts = acts.detach().requires_grad_()
+            proxy._mlp_output_activations[layer] = acts
+            return acts
+
+        hooks.append(("hook_embed", _cache_embed))
+        for layer in range(self.n_layers):
+            hooks.append(
+                (f"blocks.{layer}.{self._attn_output_hook}", partial(_cache_attn, layer=layer))
+            )
+            hooks.append(
+                (f"blocks.{layer}.{self._mlp_output_hook}", partial(_cache_mlp, layer=layer))
+            )
+        return hooks
+
+    @contextlib.contextmanager
+    def install_live_hooks(self, model: "ReplacementModel"):
+        """Install forward-only hooks for the autograd.grad attribution path."""
+
+        with model.hooks(fwd_hooks=self._live_caching_hooks(model.attn_input_hook, model.mlp_input_hook)):
+            yield
+
+    def _source_refs(self) -> List[torch.Tensor]:
+        if self._embed_activation is None:
+            raise RuntimeError("Embedding activation was not cached")
+        refs = [self._embed_activation]
+        for layer in range(self.n_layers):
+            attn_ref = self._attn_output_activations[layer]
+            mlp_ref = self._mlp_output_activations[layer]
+            if attn_ref is None or mlp_ref is None:
+                raise RuntimeError(f"Output activations were not cached for layer {layer}")
+            refs.extend((attn_ref, mlp_ref))
+        return refs
+
+    @staticmethod
+    def _layer_spans(activation_matrix: torch.Tensor) -> List[Tuple[int, int]]:
+        layers = activation_matrix.indices()[0]
+        if layers.numel() == 0:
+            return [(0, 0)] * activation_matrix.shape[0]
+        counts = torch.bincount(layers, minlength=activation_matrix.shape[0])
+        edges = torch.cat((counts.new_zeros(1), counts.cumsum(0))).tolist()
+        return list(zip(edges[:-1], edges[1:]))
+
+    def _rows_from_root(self, root: torch.Tensor, *, retain_graph: bool) -> torch.Tensor:
+        """Return source input-times-gradient rows for independent batch lanes."""
+
+        refs = self._source_refs()
+        grads = torch.autograd.grad(
+            root,
+            refs,
+            retain_graph=retain_graph,
+            allow_unused=True,
+            materialize_grads=True,
+        )
+        batch_size = refs[0].shape[0]
+        dtype = self._lorsa_decoder_vecs.dtype
+        device = refs[0].device
+        rows = torch.zeros(batch_size, self._row_size, dtype=dtype, device=device)
+
+        embed_grad = grads[0].to(dtype)
+        token_offset = (
+            self._lorsa_activation_matrix._nnz()
+            + self._tc_activation_matrix._nnz()
+            + 2 * self.n_layers * self.n_pos
+        )
+        rows[:, token_offset : token_offset + self.n_pos] = torch.einsum(
+            "bpd,pd->bp", embed_grad, self._token_vectors.to(device=device, dtype=dtype)
+        )
+
+        lorsa_positions = self._lorsa_activation_matrix.indices()[1]
+        tc_positions = self._tc_activation_matrix.indices()[1]
+        lorsa_spans = self._layer_spans(self._lorsa_activation_matrix)
+        tc_spans = self._layer_spans(self._tc_activation_matrix)
+        n_lorsa = self._lorsa_activation_matrix._nnz()
+        n_tc = self._tc_activation_matrix._nnz()
+
+        def contract_features(
+            grad: torch.Tensor,
+            positions: torch.Tensor,
+            vectors: torch.Tensor,
+            start: int,
+            end: int,
+        ) -> torch.Tensor:
+            """Contract feature sources without a full ``[batch, features, d]`` temporary."""
+
+            count = end - start
+            result = rows.new_empty((batch_size, count))
+            # At BT4 dimensions, 128 features caps the FP32 gather temporary at
+            # 32 MiB for a 64-lane VJP instead of several hundred MiB per layer.
+            feature_chunk_size = 128
+            for local_start in range(0, count, feature_chunk_size):
+                local_end = min(local_start + feature_chunk_size, count)
+                source_slice = slice(start + local_start, start + local_end)
+                selected = grad.index_select(1, positions[source_slice])
+                result[:, local_start:local_end] = torch.einsum(
+                    "bnd,nd->bn", selected, vectors[source_slice]
+                )
+            return result
+
+        for layer in range(self.n_layers):
+            attn_grad = grads[1 + 2 * layer].to(dtype)
+            mlp_grad = grads[2 + 2 * layer].to(dtype)
+
+            start, end = lorsa_spans[layer]
+            if end > start:
+                rows[:, start:end] = contract_features(
+                    attn_grad,
+                    lorsa_positions,
+                    self._lorsa_decoder_vecs,
+                    start,
+                    end,
+                )
+            attn_error_offset = n_lorsa + n_tc + layer * self.n_pos
+            rows[:, attn_error_offset : attn_error_offset + self.n_pos] = torch.einsum(
+                "bpd,pd->bp", attn_grad, self._error_vectors[layer].to(dtype)
+            )
+
+            start, end = tc_spans[layer]
+            if end > start:
+                rows[:, n_lorsa + start : n_lorsa + end] = contract_features(
+                    mlp_grad,
+                    tc_positions,
+                    self._tc_decoder_vecs,
+                    start,
+                    end,
+                )
+            mlp_error_offset = n_lorsa + n_tc + self.n_layers * self.n_pos + layer * self.n_pos
+            rows[:, mlp_error_offset : mlp_error_offset + self.n_pos] = torch.einsum(
+                "bpd,pd->bp", mlp_grad, self._error_vectors[self.n_layers + layer].to(dtype)
+            )
+
+        return rows
+
+    def compute_vjp_batch(
+        self,
+        layers: torch.Tensor,
+        positions: torch.Tensor,
+        inject_values: torch.Tensor,
+        attention_patterns: torch.Tensor | None = None,
+        retain_graph: bool = True,
+    ) -> torch.Tensor:
+        """Compute feature rows in parallel using one scalar-root VJP."""
+
+        n_targets = layers.numel()
+        if n_targets == 0:
+            return inject_values.new_zeros((0, self._row_size))
+        if n_targets > self._resid_activations[0].shape[0]:
+            raise ValueError(
+                f"VJP batch has {n_targets} targets but the replicated forward has "
+                f"only {self._resid_activations[0].shape[0]} lanes"
+            )
+
+        root = inject_values.new_zeros(())
+        batch_indices = torch.arange(n_targets, device=inject_values.device)
+        for layer in torch.unique(layers).tolist():
+            mask = layers == layer
+            lanes = batch_indices[mask]
+            activation = self._resid_activations[int(layer)]
+            if activation is None:
+                raise RuntimeError(f"Residual activation {layer} was not cached")
+            if attention_patterns is None:
+                target_values = activation[lanes, positions[mask]]
+                root = root + (target_values * inject_values[mask]).sum()
+            else:
+                distributed = inject_values[mask, None, :] * attention_patterns[mask, :, None]
+                root = root + (activation.index_select(0, lanes) * distributed).sum()
+        return self._rows_from_root(root, retain_graph=retain_graph)[:n_targets]
+
+    def compute_qk_vjp_batch(
+        self,
+        q_positions: torch.Tensor,
+        k_positions: torch.Tensor,
+        q_values: torch.Tensor,
+        k_values: torch.Tensor,
+        *,
+        castle_tensor: torch.Tensor | None = None,
+        retain_graph: bool = True,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute independent Q and K logit rows in one autograd traversal."""
+
+        if self._policy_q_activations is None or self._policy_k_activations is None:
+            raise RuntimeError("Policy Q/K activations were not cached")
+        n_targets = q_values.shape[0]
+        if 2 * n_targets > self._policy_q_activations.shape[0]:
+            raise ValueError("Replicated forward needs at least two lanes per Q/K logit target")
+
+        device = self._policy_q_activations.device
+        q_positions = q_positions.to(device=device, dtype=torch.long).reshape(n_targets, -1)
+        k_positions = k_positions.to(device=device, dtype=torch.long).reshape(n_targets, -1)
+        if castle_tensor is not None:
+            castle = castle_tensor.to(device=device, dtype=torch.bool).reshape(-1)
+            end = k_positions[:, 0]
+            row, col = torch.div(end, 8, rounding_mode="floor"), end.remainder(8)
+            end = torch.where(castle & (col == 6), row * 8 + 7, end)
+            end = torch.where(castle & (col == 2), row * 8, end)
+            k_positions = k_positions.clone()
+            k_positions[:, 0] = end
+
+        q_lanes = torch.arange(n_targets, device=device)
+        k_lanes = q_lanes + n_targets
+        q_root = q_values.new_zeros(())
+        k_root = k_values.new_zeros(())
+        for column in range(q_positions.shape[1]):
+            pos = q_positions[:, column]
+            q_term = q_values[:, column] if q_values.ndim == 4 else q_values
+            q_root = q_root + (
+                self._policy_q_activations[q_lanes, pos] * q_term[q_lanes, pos]
+            ).sum()
+        for column in range(k_positions.shape[1]):
+            pos = k_positions[:, column]
+            k_term = k_values[:, column] if k_values.ndim == 4 else k_values
+            k_root = k_root + (
+                self._policy_k_activations[k_lanes, pos] * k_term[q_lanes, pos]
+            ).sum()
+
+        rows = self._rows_from_root(q_root + k_root, retain_graph=retain_graph)
+        return rows[:n_targets], rows[n_targets : 2 * n_targets]
+
+    def compute_policy_qk_gradients(
+        self,
+        policy_logits: torch.Tensor,
+        positive_indices: torch.Tensor | None,
+        negative_indices: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
+        """Get detached policy-logit gradients with respect to Q and K in one VJP."""
+
+        if self._policy_q_activations is None or self._policy_k_activations is None:
+            raise RuntimeError("Policy Q/K activations were not cached")
+        if positive_indices is None and negative_indices is None:
+            raise ValueError("At least one policy-logit index tensor is required")
+        root = policy_logits.new_zeros(())
+        lane_offset = 0
+        positive_lanes = None
+        negative_lanes = None
+        if positive_indices is not None:
+            positive = positive_indices.to(device=policy_logits.device, dtype=torch.long).reshape(-1)
+            positive_lanes = torch.arange(positive.numel(), device=policy_logits.device)
+            root = root + policy_logits[positive_lanes, positive].sum()
+            lane_offset = positive.numel()
+        if negative_indices is not None:
+            negative = negative_indices.to(device=policy_logits.device, dtype=torch.long).reshape(-1)
+            negative_lanes = torch.arange(negative.numel(), device=policy_logits.device) + lane_offset
+            root = root - policy_logits[negative_lanes, negative].sum()
+        q_grad, k_grad = torch.autograd.grad(
+            root,
+            (self._policy_q_activations, self._policy_k_activations),
+            retain_graph=True,
+        )
+        return (
+            q_grad.index_select(0, positive_lanes).detach() if positive_lanes is not None else None,
+            k_grad.index_select(0, positive_lanes).detach() if positive_lanes is not None else None,
+            q_grad.index_select(0, negative_lanes).detach() if negative_lanes is not None else None,
+            k_grad.index_select(0, negative_lanes).detach() if negative_lanes is not None else None,
+        )
 
 
     def _compute_score_hook(
@@ -357,6 +639,17 @@ class AttributionContext:
     @contextlib.contextmanager
     def install_hooks(self, model: "ReplacementModel"):
         """Context manager instruments the hooks for the forward and backward passes."""
+        if self._attribution_hooks is None:
+            self._attribution_hooks = self._make_attribution_hooks(
+                self._lorsa_activation_matrix,
+                self._tc_activation_matrix,
+                self._error_vectors,
+                self._token_vectors,
+                self._lorsa_decoder_vecs,
+                self._tc_decoder_vecs,
+                self._attn_output_hook,
+                self._mlp_output_hook,
+            )
         with model.hooks(
             fwd_hooks=self._caching_hooks(model.attn_input_hook, model.mlp_input_hook),
             bwd_hooks=self._attribution_hooks,
@@ -1609,7 +1902,6 @@ def select_encoder_rows_lorsa(
     """Return encoder rows for **active** features only."""
     rows: List[torch.Tensor] = []
     patterns: List[torch.Tensor] = []
-    torch.cuda.synchronize()
     for layer, row in enumerate(activation_matrix):
         qpos, head_idx = row.coalesce().indices()
         # qk_idx = head_idx // lorsas[layer].cfg.d_qk_head
@@ -1716,29 +2008,38 @@ def select_encoder_bias_lorsa(
 
 #     return influences
 
-def compute_partial_influences(edge_matrix, logit_p, row_to_node_index,
-                               max_iter=128, device=None, sign_mode="abs"):  # 'abs' | 'signed'
+def _normalize_rows(rows: torch.Tensor, sign_mode: str = "abs") -> torch.Tensor:
+    denominator = rows.abs().sum(dim=1, keepdim=True).clamp(min=1e-8)
+    if sign_mode == "abs":
+        return rows.abs() / denominator
+    if sign_mode == "signed":
+        return rows / denominator
+    raise ValueError("sign_mode must be 'abs' or 'signed'")
+
+
+def compute_partial_influences(
+    edge_matrix,
+    logit_p,
+    row_to_node_index,
+    max_iter=128,
+    device=None,
+    sign_mode="abs",
+    pre_normalized: bool = False,
+):  # 'abs' | 'signed'
     device = device or edge_matrix.device
     W = edge_matrix.to(device)
 
-    if sign_mode == "abs":
-        W = W.abs()
-        W = W / W.sum(dim=1, keepdim=True).clamp(min=1e-8)
-    elif sign_mode == "signed":
-        # print('partial influence computed in signed mode')
-        W = W / W.abs().sum(dim=1, keepdim=True).clamp(min=1e-8)
-    else:
-        raise ValueError("sign_mode must be 'abs' or 'signed'")
+    if not pre_normalized:
+        W = _normalize_rows(W, sign_mode)
 
-    influences = torch.zeros(W.shape[1], device=W.device)
-    prod = torch.zeros(W.shape[1], device=W.device)
-    prod[-len(logit_p):] = logit_p.to(W.device)
+    influences = torch.zeros(W.shape[1], device=W.device, dtype=W.dtype)
+    prod = torch.zeros(W.shape[1], device=W.device, dtype=W.dtype)
+    if len(logit_p) > 0:
+        prod[-len(logit_p):] = logit_p.to(device=W.device, dtype=W.dtype)
     row_to_node_index = row_to_node_index.to(W.device)
 
     for _ in range(max_iter):
         prod = prod.index_select(0, row_to_node_index) @ W
-        if prod.abs().sum() < 1e-12:
-            break
         influences += prod
 
     return influences
@@ -1783,16 +2084,173 @@ def _batched_index_queue(indices: torch.Tensor, batch_size: int) -> deque[torch.
     return deque(indices.split(batch_size))
 
 
+def run_joint_feature_attribution(
+    *,
+    ctx: AttributionContext,
+    requested_sides: Sequence[str],
+    edge_matrices: Dict[str, torch.Tensor],
+    normalized_matrices: Dict[str, torch.Tensor],
+    row_to_node_indices: Dict[str, torch.Tensor],
+    total_active_feats: int,
+    max_feature_nodes: int,
+    update_interval: int,
+    selection_batch_size: int,
+    vjp_batch_size: int,
+    n_logits: int,
+    logit_p: torch.Tensor,
+    logit_offset: int,
+    idx_to_layer: Callable[[torch.Tensor], torch.Tensor],
+    idx_to_pos: Callable[[torch.Tensor], torch.Tensor],
+    idx_to_encoder_rows: Callable[[torch.Tensor], torch.Tensor],
+    idx_to_pattern: Callable[[torch.Tensor], torch.Tensor],
+    order_mode: str,
+    initial_queue: Optional[torch.Tensor] = None,
+) -> Dict[str, Dict[str, torch.Tensor]]:
+    """Advance independent Q/K greedy queues while sharing feature-row VJPs."""
+
+    sign_mode, descending = partial_influence_queue_config(order_mode)
+    device = next(iter(edge_matrices.values())).device
+    selection_batch_size = max(1, selection_batch_size)
+    states: Dict[str, Dict[str, Any]] = {}
+    for side in requested_sides:
+        manual = deque()
+        if initial_queue is not None and initial_queue.numel() > 0:
+            manual = _batched_index_queue(torch.unique(initial_queue.to(device)), selection_batch_size)
+        states[side] = {
+            "visited": torch.zeros(total_active_feats, dtype=torch.bool, device=device),
+            "n_visited": 0,
+            "st": n_logits,
+            "manual": manual,
+            "auto": deque(),
+        }
+
+    cache_side = torch.full((total_active_feats,), -1, dtype=torch.int8, device=device)
+    cache_row = torch.full((total_active_feats,), -1, dtype=torch.long, device=device)
+    side_number = {side: i for i, side in enumerate(requested_sides)}
+    number_side = {i: side for side, i in side_number.items()}
+
+    def next_batch(side: str) -> torch.Tensor:
+        state = states[side]
+        if state["n_visited"] >= max_feature_nodes:
+            return torch.empty(0, dtype=torch.long, device=device)
+        queue = state["manual"]
+        if not queue:
+            queue = state["auto"]
+        if not queue:
+            if n_logits == 0:
+                return torch.empty(0, dtype=torch.long, device=device)
+            visited = state["visited"]
+            remaining = max_feature_nodes - state["n_visited"]
+            if max_feature_nodes == total_active_feats:
+                pending = torch.nonzero(~visited, as_tuple=True)[0][:remaining]
+            else:
+                st = state["st"]
+                influences = compute_partial_influences(
+                    normalized_matrices[side][:st],
+                    logit_p,
+                    row_to_node_indices[side][:st],
+                    max_iter=2 * ctx.n_layers + 2,
+                    sign_mode=sign_mode,
+                    pre_normalized=True,
+                )
+                available = torch.nonzero(~visited, as_tuple=True)[0]
+                queue_size = min(update_interval * selection_batch_size, remaining, available.numel())
+                if queue_size == 0:
+                    return torch.empty(0, dtype=torch.long, device=device)
+                scores = influences[:total_active_feats].index_select(0, available)
+                top = torch.topk(scores, k=queue_size, largest=descending, sorted=True).indices
+                pending = available.index_select(0, top)
+            state["auto"] = _batched_index_queue(pending, selection_batch_size)
+            queue = state["auto"]
+        batch = queue.popleft()
+        remaining = max_feature_nodes - state["n_visited"]
+        return batch[:remaining]
+
+    progress = {side: tqdm(total=max_feature_nodes, desc=f"{side.upper()} feature influence") for side in requested_sides}
+    try:
+        while any(states[side]["n_visited"] < max_feature_nodes for side in requested_sides):
+            batches = {side: next_batch(side) for side in requested_sides}
+            active = {side: gids for side, gids in batches.items() if gids.numel() > 0}
+            if not active:
+                break
+            union = torch.unique(torch.cat(tuple(active.values())))
+            union_rows = edge_matrices[requested_sides[0]].new_zeros((union.numel(), logit_offset))
+            cached = cache_side.index_select(0, union) >= 0
+            for number, cached_side_name in number_side.items():
+                mask = cached & (cache_side.index_select(0, union) == number)
+                if mask.any():
+                    rows = cache_row.index_select(0, union[mask])
+                    union_rows[mask] = edge_matrices[cached_side_name].index_select(0, rows)[:, :logit_offset]
+
+            missing_gids = union[~cached]
+            if missing_gids.numel() > 0:
+                chunks = []
+                for gid_chunk in missing_gids.split(vjp_batch_size):
+                    patterns = idx_to_pattern(gid_chunk).detach()
+                    rows = ctx.compute_vjp_batch(
+                        layers=idx_to_layer(gid_chunk),
+                        positions=idx_to_pos(gid_chunk),
+                        inject_values=idx_to_encoder_rows(gid_chunk).detach(),
+                        attention_patterns=patterns,
+                        retain_graph=True,
+                    )
+                    chunks.append(rows.to(union_rows.dtype))
+                union_rows[~cached] = torch.cat(chunks, dim=0)
+
+            newly_cached: List[Tuple[str, torch.Tensor, torch.Tensor]] = []
+            for side, gids in active.items():
+                state = states[side]
+                offsets = torch.searchsorted(union, gids)
+                rows = union_rows.index_select(0, offsets)
+                st = state["st"]
+                end = st + gids.numel()
+                edge_matrices[side][st:end, :logit_offset] = rows
+                normalized_matrices[side][st:end, :logit_offset] = _normalize_rows(
+                    rows.float(), sign_mode
+                ).to(normalized_matrices[side].dtype)
+                row_to_node_indices[side][st:end] = gids
+                state["visited"][gids] = True
+                state["n_visited"] += gids.numel()
+                state["st"] = end
+                progress[side].update(gids.numel())
+                newly_cached.append((side, gids, torch.arange(st, end, device=device)))
+
+            missing_set = ~cached
+            if missing_set.any():
+                missing_union = union[missing_set]
+                for side, gids, rows in newly_cached:
+                    is_missing = torch.isin(gids, missing_union) & (cache_side.index_select(0, gids) < 0)
+                    if is_missing.any():
+                        selected = gids[is_missing]
+                        cache_side[selected] = side_number[side]
+                        cache_row[selected] = rows[is_missing]
+    finally:
+        for bar in progress.values():
+            bar.close()
+
+    return {
+        side: {
+            "visited": states[side]["visited"],
+            "edge_matrix": edge_matrices[side],
+            "normalized_matrix": normalized_matrices[side],
+            "row_to_node_index": row_to_node_indices[side],
+        }
+        for side in requested_sides
+    }
+
+
 def attribute(
     prompt: Union[str, torch.Tensor, List[int]],
     model: ReplacementModel,
     is_castle: bool = False,
     *,
     max_n_logits: int = 10,
-    side: str = 'k',                     # 'q' | 'k' | 'both'
+    side: str = 'both',                  # 'q' | 'k' | 'both'
     desired_logit_prob: float = 0.95,
-    batch_size: int = 512,
-    max_feature_nodes: Optional[int] = None,
+    batch_size: int = 64,
+    max_feature_nodes: Optional[int] = 4096,
+    vjp_batch_size: Optional[int] = None,
+    mixed_precision_edges: bool = True,
     offload: Literal["cpu", "disk", None] = None,
     verbose: bool = False,
     update_interval: int = 4,
@@ -1828,6 +2286,8 @@ def attribute(
             desired_logit_prob=desired_logit_prob,
             batch_size=batch_size,
             max_feature_nodes=max_feature_nodes,
+            vjp_batch_size=vjp_batch_size,
+            mixed_precision_edges=mixed_precision_edges,
             offload=offload,
             offload_handles=offload_handles,
             update_interval=update_interval,
@@ -1852,12 +2312,14 @@ def attribute(
 
 def _run_attribution(
     model,
-    prompt: torch.Tensor,
+    prompt: Union[str, torch.Tensor, List[int]],
     max_n_logits: int,
     side: str,                           # 'q' | 'k' | 'both'
     desired_logit_prob: float,
     batch_size: int,
     max_feature_nodes: Optional[int],
+    vjp_batch_size: Optional[int],
+    mixed_precision_edges: bool,
     offload: Literal["cpu", "disk", None],
     offload_handles: list,
     update_interval: int = 4,
@@ -1865,7 +2327,7 @@ def _run_attribution(
     fen: Optional[str] = None,
     lboard: Optional[Any] = None,
     is_castle: bool = False,
-    move_idx: Optional[int] = None,
+    move_idx: int | tuple[int, int] | None = None,
     verbose: bool = False,
     encoder_demean: bool = False,
     # for filtering
@@ -1905,8 +2367,98 @@ def _run_attribution(
     phase_start = time.time()
 
     input_ids = prompt
+    if vjp_batch_size is None:
+        vjp_batch_size = batch_size
+    if vjp_batch_size < 1:
+        raise ValueError("vjp_batch_size must be positive")
+    policy_lane_count = 2 * max_n_logits
+    if order_mode == "group":
+        if fen is None or positive_move_idx is None:
+            raise ValueError("group attribution requires fen and move_idx")
+        group_board = LeelaBoard.from_fen(fen)
+        group_uci = group_board.idx2uci(int(positive_move_idx))
+        policy_lane_count = 1 + sum(
+            candidate.uci().startswith(group_uci[:2])
+            and candidate.uci() != group_uci
+            for candidate in group_board.generate_legal_moves()
+        )
+    live_batch_size = max(vjp_batch_size, policy_lane_count, 2)
+    if isinstance(input_ids, str):
+        replicated_inputs: Union[List[str], torch.Tensor] = [input_ids] * live_batch_size
+    elif isinstance(input_ids, torch.Tensor):
+        base_inputs = input_ids.unsqueeze(0) if input_ids.ndim == 1 else input_ids
+        if base_inputs.shape[0] != 1:
+            raise ValueError("Attribution expects one logical prompt before VJP replication")
+        replicated_inputs = base_inputs.expand(live_batch_size, *base_inputs.shape[1:])
+    else:
+        replicated_inputs = torch.as_tensor(input_ids).unsqueeze(0).expand(live_batch_size, -1)
+
+    live_resid: List[Optional[torch.Tensor]] = [None] * (2 * model.cfg.n_layers + 1)
+    live_attn_outputs: List[Optional[torch.Tensor]] = [None] * model.cfg.n_layers
+    live_mlp_outputs: List[Optional[torch.Tensor]] = [None] * model.cfg.n_layers
+    live_refs: Dict[str, torch.Tensor] = {}
+
+    def _cache_live_ref(acts, hook, *, key):
+        if not acts.requires_grad:
+            acts = acts.detach().requires_grad_()
+        live_refs[key] = acts
+        return acts
+
+    def _cache_live_slot(acts, hook, *, slots, index, make_leaf=False):
+        if make_leaf and not acts.requires_grad:
+            acts = acts.detach().requires_grad_()
+        slots[index] = acts
+        return acts
+
+    live_hooks = [("hook_embed", partial(_cache_live_ref, key="embed"))]
+    for layer in range(model.cfg.n_layers):
+        live_hooks.extend(
+            [
+                (
+                    f"blocks.{layer}.{model.attn_input_hook}",
+                    partial(_cache_live_slot, slots=live_resid, index=2 * layer),
+                ),
+                (
+                    f"blocks.{layer}.{model.mlp_input_hook}",
+                    partial(_cache_live_slot, slots=live_resid, index=2 * layer + 1),
+                ),
+                (
+                    f"blocks.{layer}.{model.attn_output_hook}",
+                    partial(
+                        _cache_live_slot,
+                        slots=live_attn_outputs,
+                        index=layer,
+                        make_leaf=True,
+                    ),
+                ),
+                (
+                    f"blocks.{layer}.{model.mlp_output_hook}",
+                    partial(
+                        _cache_live_slot,
+                        slots=live_mlp_outputs,
+                        index=layer,
+                        make_leaf=True,
+                    ),
+                ),
+            ]
+        )
+    live_hooks.extend(
+        [
+            (
+                "policy_head.hook_pre",
+                partial(_cache_live_slot, slots=live_resid, index=2 * model.cfg.n_layers),
+            ),
+            ("policy_head.hook_q", partial(_cache_live_ref, key="policy_q")),
+            ("policy_head.hook_k", partial(_cache_live_ref, key="policy_k")),
+        ]
+    )
+
     model_out, lorsa_activation_matrix, lorsa_attention_pattern, tc_activation_matrix, error_vecs, token_vecs = model.setup_attribution(
-        input_ids, sparse=True
+        replicated_inputs,
+        sparse=True,
+        extra_fwd_hooks=live_hooks,
+        enable_grad=True,
+        first_batch_only=True,
     )
     print("set up attribution! ")
     
@@ -1928,27 +2480,22 @@ def _run_attribution(
         model.attn_output_hook,
         model.mlp_output_hook
     )
+    ctx._resid_activations = live_resid
+    ctx._embed_activation = live_refs["embed"]
+    ctx._attn_output_activations = live_attn_outputs
+    ctx._mlp_output_activations = live_mlp_outputs
+    ctx._policy_q_activations = live_refs["policy_q"]
+    ctx._policy_k_activations = live_refs["policy_k"]
     logger.info(f"Precomputation completed in {time.time() - phase_start:.2f}s")
     logger.info(f"Found {tc_activation_matrix._nnz()} active features")
 
     if offload:
         offload_handles += offload_modules(model.transcoders, offload)
 
-    # ========== Phase 1: Forward pass ==========
-    logger.info("Phase 1: Running forward pass")
-    print("Phase 1: Running forward pass")
-    phase_start = time.time()
-    
-    with ctx.install_hooks(model):
-        residual = model.forward(input_ids, stop_at_layer=model.cfg.n_layers)
-        ctx._resid_activations[-1] = residual
-        if hasattr(model, 'policy_head'):
-            _ = model.policy_head(residual)
-    
-    # Activation information will be collected in Phase 5 according to selected features
+    # BT4 returns a list of head outputs; policy logits are the first head.
+    # The setup caches and live VJP graph are collected by the same replicated forward.
+    live_policy_logits = model_out[0]
     activation_info = None
-    print(f"Forward pass completed in {time.time() - phase_start:.2f}s")
-    logger.info(f"Forward pass completed in {time.time() - phase_start:.2f}s")
 
     if offload:
         offload_handles += offload_modules(
@@ -1982,46 +2529,119 @@ def _run_attribution(
     move_positions_negative = None
     logit_vecs_negative = None
     
+    group_negative_indices = None
+
+    def _selected_move(move: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if fen is None:
+            raise ValueError("fen is required for policy Q/K attribution")
+        idx = torch.tensor([move], device=policy_out.device, dtype=torch.long)
+        probability = torch.softmax(policy_out[0], dim=-1).index_select(0, idx)
+        board = LeelaBoard.from_fen(fen)
+        uci = board.idx2uci(int(move))
+        positions = torch.as_tensor(
+            board.uci_to_positions(uci),
+            device=policy_out.device,
+            dtype=torch.long,
+        ).reshape(1, 2)
+        return idx, probability, positions
+
+    def _selected_group(
+        move: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        if fen is None:
+            raise ValueError("fen is required for group policy attribution")
+        board = LeelaBoard.from_fen(fen)
+        idx, probability, positions = _selected_move(move)
+        chosen_uci = board.idx2uci(move)
+        alternatives = [
+            candidate.uci()
+            for candidate in board.generate_legal_moves()
+            if candidate.uci().startswith(chosen_uci[:2]) and candidate.uci() != chosen_uci
+        ]
+        negative_indices = torch.tensor(
+            [board.uci2idx(candidate) for candidate in alternatives],
+            device=policy_out.device,
+            dtype=torch.long,
+        )
+        k_positions = [int(positions[0, 1].item())]
+        k_positions.extend(
+            int(torch.as_tensor(board.uci_to_positions(candidate))[1].item())
+            for candidate in alternatives
+        )
+        grouped_positions = torch.full(
+            (1, 2, len(k_positions)),
+            -1,
+            device=policy_out.device,
+            dtype=torch.long,
+        )
+        grouped_positions[0, 0, 0] = positions[0, 0]
+        grouped_positions[0, 1] = torch.tensor(
+            k_positions, device=policy_out.device, dtype=torch.long
+        )
+        return idx, probability, grouped_positions, negative_indices
+
     # Process positive move (positive injection)
     if not feature_specs_requested and positive_move_idx is not None:
-        if order_mode == 'group':
-            print('compute logit info in group mode')
-            logit_idx_positive, logit_p_positive, logit_vecs_q_positive, logit_vecs_k_positive, move_positions_positive, logit_vecs_positive = compute_logit_gradients_wrt_group_k(
-                fen=fen,
-                logits=policy_out[0],
-                model=model,
-                residual_input=residual,
-                max_n_logits=max_n_logits,
-                desired_logit_prob=desired_logit_prob,
-                demean=False,
-                move_idx=positive_move_idx,      
+        if order_mode == "group":
+            (
+                logit_idx_positive,
+                logit_p_positive,
+                move_positions_positive,
+                group_negative_indices,
+            ) = _selected_group(
+                int(positive_move_idx)
             )
         else:
-            print('compute positive logit gradients')
-            logit_idx_positive, logit_p_positive, logit_vecs_q_positive, logit_vecs_k_positive, move_positions_positive, logit_vecs_positive = compute_logit_gradients_wrt_qk(
-                fen=fen,
-                logits=policy_out[0],
-                model=model,
-                residual_input=residual,
-                max_n_logits=max_n_logits,
-                desired_logit_prob=desired_logit_prob,
-                demean=False,
-                move_idx=positive_move_idx,
+            logit_idx_positive, logit_p_positive, move_positions_positive = _selected_move(
+                int(positive_move_idx)
             )
     
     # Process negative move (negative injection)
     if not feature_specs_requested and negative_move_idx is not None:
-        print('compute negative logit gradients')
-        logit_idx_negative, logit_p_negative, logit_vecs_q_negative, logit_vecs_k_negative, move_positions_negative, logit_vecs_negative = compute_logit_gradients_wrt_qk(
-            fen=fen,
-            logits=policy_out[0],
-            model=model,
-            residual_input=residual,
-            max_n_logits=max_n_logits,
-            desired_logit_prob=desired_logit_prob,
-            demean=False,
-            move_idx=negative_move_idx,
+        logit_idx_negative, logit_p_negative, move_positions_negative = _selected_move(
+            int(negative_move_idx)
         )
+
+    if not feature_specs_requested:
+        positive_for_grad = logit_idx_positive if positive_move_idx is not None else None
+        negative_for_grad = (
+            group_negative_indices
+            if order_mode == "group"
+            else logit_idx_negative if negative_move_idx is not None else None
+        )
+        (
+            logit_vecs_q_positive,
+            logit_vecs_k_positive,
+            logit_vecs_q_negative,
+            logit_vecs_k_negative,
+        ) = ctx.compute_policy_qk_gradients(
+            live_policy_logits,
+            positive_for_grad,
+            negative_for_grad,
+        )
+        if order_mode == "group" and group_negative_indices is not None and group_negative_indices.numel() > 0:
+            assert logit_vecs_q_positive is not None
+            assert logit_vecs_k_positive is not None
+            assert logit_vecs_q_negative is not None
+            assert logit_vecs_k_negative is not None
+            logit_vecs_q_positive = (
+                logit_vecs_q_positive
+                + logit_vecs_q_negative.sum(dim=0, keepdim=True)
+                / group_negative_indices.numel()
+            )
+            logit_vecs_k_positive = (
+                logit_vecs_k_positive
+                + logit_vecs_k_negative.sum(dim=0, keepdim=True)
+                / group_negative_indices.numel()
+            )
+        if positive_move_idx is not None:
+            logit_vecs_q = logit_vecs_q_positive
+            logit_vecs_k = logit_vecs_k_positive
+        else:
+            logit_vecs_q = logit_vecs_q_negative
+            logit_vecs_k = logit_vecs_k_negative
+        assert logit_vecs_q is not None
+        logit_vecs = torch.zeros_like(logit_vecs_q)
     
     # Determine the main logit information (for subsequent processing)
     if positive_move_idx is not None:
@@ -2045,6 +2665,9 @@ def _run_attribution(
         logit_vecs = torch.zeros(0, dtype=dtype, device=device)
     else:
         raise ValueError("No move_idx provided, and no feature_trace_specs provided, cannot determine the end point.")
+
+    assert logit_idx is not None
+    assert logit_p is not None
     
     # print(f'{move_positions = }')
     logger.info(
@@ -2058,14 +2681,39 @@ def _run_attribution(
     n_logits = len(logit_idx)
     total_nodes = logit_offset + n_logits
 
-    max_feature_nodes = min(max_feature_nodes or total_active_feats, total_active_feats)
+    requested_feature_nodes = total_active_feats if max_feature_nodes is None else max_feature_nodes
+    max_feature_nodes = min(requested_feature_nodes, total_active_feats)
     logger.info(f"Will include {max_feature_nodes} of {total_active_feats} feature nodes")
 
-    # Preallocate containers (q/k shared)
-    edge_matrix_q = torch.zeros(max_feature_nodes + n_logits, total_nodes)
-    edge_matrix_k = torch.zeros(max_feature_nodes + n_logits, total_nodes)
-    row_to_node_index_q = torch.zeros(max_feature_nodes + n_logits, dtype=torch.int32)
-    row_to_node_index_k = torch.zeros(max_feature_nodes + n_logits, dtype=torch.int32)
+    requested_sides = ("q", "k") if side.lower() == "both" else (side.lower(),)
+    if any(requested not in ("q", "k") for requested in requested_sides):
+        raise ValueError("side must be 'q', 'k', or 'both'")
+    if mixed_precision_edges and policy_out.device.type == "cuda":
+        edge_dtype = (
+            torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        )
+    else:
+        edge_dtype = torch.float32
+    influence_sign_mode, _ = partial_influence_queue_config(order_mode)
+    edge_matrices = {
+        requested: torch.zeros(
+            max_feature_nodes + n_logits,
+            total_nodes,
+            dtype=edge_dtype,
+            device=policy_out.device,
+        )
+        for requested in requested_sides
+    }
+    normalized_matrices = {requested: torch.zeros_like(matrix) for requested, matrix in edge_matrices.items()}
+    row_to_node_indices = {
+        requested: torch.full(
+            (max_feature_nodes + n_logits,),
+            total_nodes,
+            dtype=torch.long,
+            device=policy_out.device,
+        )
+        for requested in requested_sides
+    }
 
     # ========== Phase 3: logit attribution (write the first n_logits rows) ==========
     def bias_attr_now(model):
@@ -2073,7 +2721,11 @@ def _run_attribution(
         for name, b in model._get_requires_grad_bias_params():
             if b.grad is not None and 'input' not in name:
                 vals.append((b.detach() * b.grad).sum())
-        return torch.stack(vals).sum() if vals else b.new_zeros(())
+        return (
+            torch.stack(vals).sum()
+            if vals
+            else torch.zeros((), device=policy_out.device, dtype=policy_out.dtype)
+        )
 
     logger.info("Phase 3: Computing logit attributions")
     if feature_specs_requested:
@@ -2094,133 +2746,45 @@ def _run_attribution(
     rows_k_last = None
 
     if not feature_specs_requested:
-        for i in range(0, len(logit_idx), batch_size):
-            batch_move_positions = move_positions[i : i + batch_size]
-            if order_mode == 'group':
-                batch_move_positions_q = batch_move_positions[:,0]
-                batch_move_positions_k = batch_move_positions[:,1]
-            else:      
-                batch_move_positions_k = batch_move_positions[:, 1:2]
-                batch_move_positions_q = batch_move_positions[:, 0:1]
-
-            # Initialize injection values
-            if positive_move_idx is not None:
-                batch_q = torch.zeros_like(logit_vecs_q_positive[i : i + batch_size])
-                batch_k = torch.zeros_like(logit_vecs_k_positive[i : i + batch_size])
-            else:
-                batch_q = torch.zeros_like(logit_vecs_q_negative[i : i + batch_size])
-                batch_k = torch.zeros_like(logit_vecs_k_negative[i : i + batch_size])
-            
-            # Process positive gradient injection (positive)
-            if positive_move_idx is not None:
-                batch_q += logit_vecs_q_positive[i : i + batch_size]
-                batch_k += logit_vecs_k_positive[i : i + batch_size]
-            
-            # Process negative gradient injection (negative)
-            if negative_move_idx is not None:
-                batch_q -= logit_vecs_q_negative[i : i + batch_size]
-                batch_k -= logit_vecs_k_negative[i : i + batch_size]
-                
-                # If move_pair mode, need to expand position information
-                if order_mode == 'move_pair':
-                    batch_move_position_negative = move_positions_negative[i : i + batch_size]
-                    batch_move_positions_k_negative = batch_move_position_negative[:, 1:2]
-                    batch_move_positions_q_negative = batch_move_position_negative[:, 0:1]
-                    batch_move_positions_k = torch.cat([batch_move_positions_k, batch_move_positions_k_negative], dim=1)
-                    batch_move_positions_q = torch.cat([batch_move_positions_q, batch_move_positions_q_negative], dim=1)
-
-            non_zero_row = (batch_k[0] != 0).any(dim=-1)
-
-            rows_q = ctx.compute_start_end_batch_from_q(
-                move_positions=batch_move_positions_q,
-                inject_values=batch_q,
+        selected_positions = (
+            move_positions_positive if positive_move_idx is not None else move_positions_negative
+        )
+        if order_mode == "group":
+            q_positions = selected_positions[:, 0, :1]
+            k_positions = selected_positions[:, 1, :]
+        else:
+            q_positions = selected_positions[:, 0:1]
+            k_positions = selected_positions[:, 1:2]
+        q_values = logit_vecs_q_positive if positive_move_idx is not None else logit_vecs_q_negative
+        k_values = logit_vecs_k_positive if positive_move_idx is not None else logit_vecs_k_negative
+        if order_mode == "group":
+            k_values = k_values.unsqueeze(1).expand(-1, k_positions.shape[1], -1, -1)
+        if positive_move_idx is not None and negative_move_idx is not None:
+            q_positions = torch.cat((q_positions, move_positions_negative[:, 0:1]), dim=1)
+            k_positions = torch.cat((k_positions, move_positions_negative[:, 1:2]), dim=1)
+            q_values = torch.stack((logit_vecs_q_positive, logit_vecs_q_negative), dim=1)
+            k_values = torch.stack((logit_vecs_k_positive, logit_vecs_k_negative), dim=1)
+        rows_q, rows_k = ctx.compute_qk_vjp_batch(
+            q_positions=q_positions,
+            k_positions=k_positions,
+            q_values=q_values,
+            k_values=k_values,
+            castle_tensor=torch.full((n_logits,), is_castle, device=policy_out.device),
+            retain_graph=True,
+        )
+        rows_q_last, rows_k_last = rows_q, rows_k
+        for requested, rows in (("q", rows_q), ("k", rows_k)):
+            if requested not in edge_matrices:
+                continue
+            edge_matrices[requested][:n_logits, :logit_offset] = rows.to(edge_dtype)
+            normalized_matrices[requested][:n_logits, :logit_offset] = _normalize_rows(
+                rows, influence_sign_mode
+            ).to(edge_dtype)
+            row_to_node_indices[requested][:n_logits] = torch.arange(
+                logit_offset,
+                logit_offset + n_logits,
+                device=policy_out.device,
             )
-            bias_q = bias_attr_now(model)
-            model.zero_grad(set_to_none=True)
-            non_zero_row = (batch_k[0] != 0).any(dim=-1)
-    
-            castle_tensor = torch.tensor([[True]]) if is_castle else None
-            rows_k = ctx.compute_start_end_batch_from_k(
-                move_positions=batch_move_positions_k,
-                inject_values=batch_k,
-                castle_tensor=castle_tensor,
-            )
-            bias_k = bias_attr_now(model)
-
-            # Consistency check
-            # Get the correct device and data type
-            device = ctx._policy_q_activations.device
-            dtype = ctx._policy_q_activations.dtype
-            
-            idx = batch_move_positions[0]
-            
-            # Process castle position adjustment (ensure on the correct device)
-            idx_adjusted = idx.clone().to(device)
-            if is_castle:
-                if idx_adjusted[1] == 2: idx_adjusted[1] = 0
-                elif idx_adjusted[1] == 6: idx_adjusted[1] = 7
-
-            # Calculate expected values
-            expected_q = torch.tensor(0.0, device=device, dtype=dtype)
-            expected_k = torch.tensor(0.0, device=device, dtype=dtype)
-            
-            # Add positive part (positive)
-            if positive_move_idx is not None:
-                if order_mode == 'group':
-                    print(f'verify in group mode')
-                    # idx[1]: [pos_k, neg_k1, neg_k2, ...]
-                    k_pos = idx_adjusted[1][0]
-                    k_negs = idx_adjusted[1][1:]
-                    q_dot_pos = (ctx._policy_q_activations[0][idx_adjusted[0]] * logit_vecs_q_positive[0][idx_adjusted[0]]).sum()
-                    k_dot_pos = (ctx._policy_k_activations[0][k_pos] * logit_vecs_k_positive[0][k_pos]).sum()
-                    k_neg_component = (ctx._policy_k_activations[0].index_select(0, k_negs) *
-                                    logit_vecs_k_positive[0].index_select(0, k_negs)).sum()
-                    expected_q += q_dot_pos
-                    expected_k += k_dot_pos + k_neg_component
-                else:
-                    q_dot_positive = (ctx._policy_q_activations[0][idx_adjusted[0]] * logit_vecs_q_positive[0][idx_adjusted[0]]).sum()
-                    k_dot_positive = (ctx._policy_k_activations[0][idx_adjusted[1]] * logit_vecs_k_positive[0][idx_adjusted[1]]).sum()
-                    expected_q += q_dot_positive
-                    expected_k += k_dot_positive
-            
-            # Subtract negative part (negative)
-            if negative_move_idx is not None:
-                if order_mode == 'move_pair' and 'batch_move_position_negative' in locals():
-                    idx_negative = batch_move_position_negative[0].to(device)
-                    idx_negative_adjusted = idx_negative.clone()
-                    if is_castle:
-                        if idx_negative_adjusted[1] == 2: idx_negative_adjusted[1] = 0
-                        elif idx_negative_adjusted[1] == 6: idx_negative_adjusted[1] = 7
-                    q_dot_negative = (ctx._policy_q_activations[0][idx_negative_adjusted[0]] * logit_vecs_q_negative[0][idx_negative_adjusted[0]]).sum()
-                    k_dot_negative = (ctx._policy_k_activations[0][idx_negative_adjusted[1]] * logit_vecs_k_negative[0][idx_negative_adjusted[1]]).sum()
-                    expected_q -= q_dot_negative
-                    expected_k -= k_dot_negative
-                else:
-                    # pure negative mode - use positions from negative move (pure negative mode - use positions from negative move)
-                    negative_idx = move_positions_negative[0].to(device) if move_positions_negative is not None else idx_adjusted
-                    q_dot_negative = (ctx._policy_q_activations[0][negative_idx[0]] * logit_vecs_q_negative[0][negative_idx[0]]).sum()
-                    k_dot_negative = (ctx._policy_k_activations[0][negative_idx[1]] * logit_vecs_k_negative[0][negative_idx[1]]).sum()
-                    expected_q -= q_dot_negative
-                    expected_k -= k_dot_negative
-            
-            print(f'Verification: expected_q={expected_q:.6f}, actual_q={bias_q + rows_q[0].sum():.6f}')
-            print(f'Verification: expected_k={expected_k:.6f}, actual_k={bias_k + rows_k[0].sum():.6f}')
-            
-            assert torch.allclose(bias_q + rows_q[0].sum(), expected_q, atol=1e-2), f'{bias_q + rows_q[0].sum() = }, {expected_q = }'
-            assert torch.allclose(bias_k + rows_k[0].sum(), expected_k, atol=1e-2), f'{bias_k + rows_k[0].sum() = }, {expected_k = }'
-
-            for param in model._get_requires_grad_bias_params():
-                param[1].grad = None
-
-            # Write logit rows
-            bs = batch_q.shape[0]
-            edge_matrix_q[i : i + bs, :logit_offset] = rows_q.cpu()
-            edge_matrix_k[i : i + bs, :logit_offset] = rows_k.cpu()
-            row_to_node_index_q[i : i + bs] = torch.arange(i, i + bs) + logit_offset
-            row_to_node_index_k[i : i + bs] = torch.arange(i, i + bs) + logit_offset
-
-            rows_q_last = rows_q  # Temporarily store the last batch, as "rows_*" returned
-            rows_k_last = rows_k
     print(f"Logit attributions completed in {time.time() - phase_start:.2f}s")
     logger.info(f"Logit attributions completed in {time.time() - phase_start:.2f}s")
 
@@ -2239,43 +2803,6 @@ def _run_attribution(
             layer_means.append(mean_vec)
         layer_means = torch.stack(layer_means, dim=0)  # [n_layers, d_model]
         layer_means = layer_means.to(device=tc_encoder_rows.device, dtype=tc_encoder_rows.dtype)
-
-    def prepare_for_feature_attribution():
-        """Prepare for feature attribution, retain original activation values but rebuild the computation graph"""
-        # Zero gradients
-        model.zero_grad(set_to_none=True)
-        
-        # Save current activations
-        saved_activations = []
-        for activation in ctx._resid_activations:
-            if activation is not None:
-                saved_activations.append(activation.detach().clone())
-            else:
-                saved_activations.append(None)
-        
-        saved_q_activations = ctx._policy_q_activations.detach().clone() if ctx._policy_q_activations is not None else None
-        saved_k_activations = ctx._policy_k_activations.detach().clone() if ctx._policy_k_activations is not None else None
-        
-        # Re-forward propagation to rebuild the computation graph, but use the saved values
-        with ctx.install_hooks(model):
-            residual_rebuilt = model.forward(input_ids, stop_at_layer=model.cfg.n_layers)
-            ctx._resid_activations[-1] = residual_rebuilt
-            if hasattr(model, 'policy_head'):
-                _ = model.policy_head(residual_rebuilt)
-        
-        # Verify that the re-calculated values match the saved values (for debugging)
-        for i, (saved, current) in enumerate(zip(saved_activations, ctx._resid_activations)):
-            if saved is not None and current is not None:
-                if not torch.allclose(saved, current.detach(), rtol=1e-5, atol=1e-6):
-                    print(f"Warning: Activation mismatch at layer {i}, max diff: {(saved - current.detach()).abs().max().item()}")
-        
-        if saved_q_activations is not None and ctx._policy_q_activations is not None:
-            if not torch.allclose(saved_q_activations, ctx._policy_q_activations.detach(), rtol=1e-5, atol=1e-6):
-                print(f"Warning: Q activation mismatch, max diff: {(saved_q_activations - ctx._policy_q_activations.detach()).abs().max().item()}")
-        
-        if saved_k_activations is not None and ctx._policy_k_activations is not None:
-            if not torch.allclose(saved_k_activations, ctx._policy_k_activations.detach(), rtol=1e-5, atol=1e-6):
-                print(f"Warning: K activation mismatch, max diff: {(saved_k_activations - ctx._policy_k_activations.detach()).abs().max().item()}")
 
     lorsa_feat_layer, lorsa_feat_pos, lorsa_feat_idx = lorsa_activation_matrix.indices()
     tc_feat_layer, tc_feat_pos, tc_feat_idx = tc_activation_matrix.indices()
@@ -2351,7 +2878,7 @@ def _run_attribution(
 
     # —— Build allow mask: True=retain, False=discard —— #
     # Initially all features are allowed
-    allow_mask = torch.ones(total_active_feats, dtype=torch.bool, device='cpu')
+    allow_mask = torch.ones(total_active_feats, dtype=torch.bool, device=policy_out.device)
 
     gid_to_layer = torch.cat(
         [
@@ -2448,71 +2975,28 @@ def _run_attribution(
 
             return tc_activation_matrix.values()[local_idx] - bias_val
 
-    logger.info("Entering feature attribution loop")
-    
-    # Determine which edge_matrix to call based on side
-    fa_result = {}
-    side_lower = side.lower()
-    
-    if side_lower in ('q', 'both'):
-        logger.info("Computing feature attributions for Q")
-        prepare_for_feature_attribution()  # Prepare computation graph, retain activations
-        fa_result_q = run_feature_attribution(
-            ctx=ctx,
-            model=model,
-            tc_activation_matrix=tc_activation_matrix,
-            total_active_feats=total_active_feats,
-            max_feature_nodes=max_feature_nodes,
-            update_interval=update_interval,
-            batch_size=batch_size,
-            n_logits=n_logits,
-            logit_p=logit_p,
-            logit_offset=logit_offset,
-            idx_to_layer=idx_to_layer,
-            idx_to_pos=idx_to_pos,
-            idx_to_encoder_rows=idx_to_encoder_rows,
-            idx_to_encoder_bias=idx_to_encoder_bias,
-            idx_to_pattern=idx_to_pattern,
-            idx_to_activation_values=idx_to_activation_values,
-            compute_partial_influences=compute_partial_influences,
-            bias_attr_now=bias_attr_now,
-            edge_matrix=edge_matrix_q,
-            row_to_node_index=row_to_node_index_q,
-            logger=logger,
-            order_mode=order_mode,
-            initial_queue=feature_queue_tensor,
-        )
-        fa_result['q'] = fa_result_q
-    
-    if side_lower in ('k', 'both'):
-        logger.info("Computing feature attributions for K")
-        prepare_for_feature_attribution()  # Prepare computation graph, retain activations
-        fa_result_k = run_feature_attribution(
-            ctx=ctx,
-            model=model,
-            tc_activation_matrix=tc_activation_matrix,
-            total_active_feats=total_active_feats,
-            max_feature_nodes=max_feature_nodes,
-            update_interval=update_interval,
-            batch_size=batch_size,
-            n_logits=n_logits,
-            logit_p=logit_p,
-            logit_offset=logit_offset,
-            idx_to_layer=idx_to_layer,
-            idx_to_pos=idx_to_pos,
-            idx_to_encoder_rows=idx_to_encoder_rows,
-            idx_to_encoder_bias=idx_to_encoder_bias,
-            idx_to_pattern=idx_to_pattern,
-            idx_to_activation_values=idx_to_activation_values,
-            compute_partial_influences=compute_partial_influences,
-            bias_attr_now=bias_attr_now,
-            edge_matrix=edge_matrix_k,
-            row_to_node_index=row_to_node_index_k,
-            logger=logger,
-            order_mode=order_mode,
-            initial_queue=feature_queue_tensor,
-        )
-        fa_result['k'] = fa_result_k
+    logger.info("Entering joint Q/K feature attribution loop")
+    fa_result = run_joint_feature_attribution(
+        ctx=ctx,
+        requested_sides=requested_sides,
+        edge_matrices=edge_matrices,
+        normalized_matrices=normalized_matrices,
+        row_to_node_indices=row_to_node_indices,
+        total_active_feats=total_active_feats,
+        max_feature_nodes=max_feature_nodes,
+        update_interval=update_interval,
+        selection_batch_size=batch_size,
+        vjp_batch_size=vjp_batch_size,
+        n_logits=n_logits,
+        logit_p=logit_p,
+        logit_offset=logit_offset,
+        idx_to_layer=idx_to_layer,
+        idx_to_pos=idx_to_pos,
+        idx_to_encoder_rows=idx_to_encoder_rows,
+        idx_to_pattern=idx_to_pattern,
+        order_mode=order_mode,
+        initial_queue=feature_queue_tensor,
+    )
 
     logger.info(f"Feature attributions completed in {time.time() - phase_start:.2f}s")
 
@@ -2542,10 +3026,10 @@ def _run_attribution(
         total_nodes = logit_offset + n_logits
         
         # 1) First select the top max_feature_nodes most important features
-        if max_feature_nodes < total_active_feats:
-            selected_features = torch.where(visited)[0].to(edge_matrix.device)
-        else:
-            selected_features = torch.arange(total_active_feats, device=edge_matrix.device)
+        # ``visited`` is authoritative. This also handles feature-seeded traces,
+        # which intentionally stop after their manual queue even when the
+        # configured feature cap exceeds the number of active features.
+        selected_features = torch.where(visited)[0].to(edge_matrix.device)
         
         # 2) Perform dense feature filtering on the selected features
         if mongo_client is not None and act_times_max is not None and len(selected_features) > 0:
@@ -2625,7 +3109,7 @@ def _run_attribution(
 
         # Mark feature rows and logit rows
         is_feature_row = (r2n_sorted < total_active_feats)
-        is_logit_row   = (r2n_sorted >= logit_offset)
+        is_logit_row = (r2n_sorted >= logit_offset) & (r2n_sorted < total_nodes)
 
         # Calculate the gid corresponding to the feature rows, and filter the "rows" according to allow_mask
         if allow_mask is not None:
@@ -2671,18 +3155,23 @@ def _run_attribution(
                 f"less than max_feature_nodes={max_feature_nodes}; "
                 f"top block will use {allowed_rows_available} rows.")
 
-        # 3) Assemble the square matrix (number of columns = total number of nodes; rows we only fill in the "allowed feature rows (at most K) + all logit rows")
+        # A merged Q/K trace consumes the compact rows directly. Avoid two
+        # temporary square matrices before allocating the final merged square.
         final_node_count = edge_matrix_perm.shape[1]
-        full_edge_matrix = torch.zeros(
-            final_node_count, final_node_count,
-            device=edge_matrix_perm.device, dtype=edge_matrix_perm.dtype
-        )
-
-        # Top: allowed feature rows (at most K rows)
-        if allowed_rows_available > 0:
-            full_edge_matrix[:allowed_rows_available] = edge_matrix_perm[:allowed_rows_available]
-
-        full_edge_matrix[-n_logits:] = edge_matrix_perm.index_select(0, logit_rows_sorted)
+        full_edge_matrix = None
+        if len(requested_sides) == 1:
+            full_edge_matrix = torch.zeros(
+                final_node_count,
+                final_node_count,
+                device=edge_matrix_perm.device,
+                dtype=edge_matrix_perm.dtype,
+            )
+            if allowed_rows_available > 0:
+                full_edge_matrix[:allowed_rows_available] = edge_matrix_perm[
+                    :allowed_rows_available
+                ]
+            if n_logits > 0:
+                full_edge_matrix[-n_logits:] = edge_matrix_perm[-n_logits:]
 
         # 4) Return the "permuted" row_to_node_index, ensuring DFS can correctly decode gid according to the new row order
         row_to_node_index_final = r2n_perm.clone()
@@ -2813,7 +3302,6 @@ def _run_attribution(
     feature_seed_trace: Optional[Dict[str, torch.Tensor]] = None
     if resolved_feature_trace_gids:
         print(f"Computing feature-seeded trace for {len(resolved_feature_trace_gids)} features")
-        prepare_for_feature_attribution()
         gid_tensor = torch.tensor(
             resolved_feature_trace_gids,
             dtype=torch.long,
@@ -3358,7 +3846,6 @@ def run_feature_seed_trace(
             "encoder_bias": torch.empty(0),
         }
 
-    model.zero_grad(set_to_none=True)
     layers = idx_to_layer(feature_gids)
     positions = idx_to_pos(feature_gids)
     inject_values = idx_to_encoder_rows(feature_gids).detach()
@@ -3367,14 +3854,13 @@ def run_feature_seed_trace(
     if isinstance(attn_patterns, torch.Tensor):
         attn_patterns = attn_patterns.detach()
 
-    rows = ctx.compute_batch(
+    rows = ctx.compute_vjp_batch(
         layers=layers,
         positions=positions,
         inject_values=inject_values,
         attention_patterns=attn_patterns,
-        retain_graph=False,
+        retain_graph=True,
     )
-    _ = bias_attr_now(model) + encoder_bias
 
     return {
         "feature_gids": feature_gids.detach().cpu(),
@@ -3394,91 +3880,51 @@ def merge_qk_graph(attribution_result):
     n_logits           = attribution_result['logits']['n_logits']
     total_nodes        = logit_offset + n_logits
 
-    # Selected features on both sides
-    sel_q = pkg_q['selected_features'].to('cpu')
-    sel_k = pkg_k['selected_features'].to('cpu')
+    device = pkg_q["edge_matrix"].device
+    sel_q = pkg_q['selected_features'].to(device)
+    sel_k = pkg_k['selected_features'].to(device)
     selected_union = torch.unique(torch.cat([sel_q, sel_k], dim=0))
 
-    # Unified column order: feature columns of the union + other non-feature nodes columns (error/token/logits)
-    non_feature_cols = torch.arange(total_active_feats, total_nodes, dtype=torch.long)
+    non_feature_cols = torch.arange(total_active_feats, total_nodes, dtype=torch.long, device=device)
     col_read_merged = torch.cat([selected_union, non_feature_cols], dim=0)
-
-    def expand_to_merged_cols(edge_matrix_side, col_read_side, col_read_target):
-        # Expand/align the single-side matrix (according to the col_read on that side) to the merged column coordinates
-        M = torch.zeros(edge_matrix_side.shape[0], col_read_target.numel(), dtype=edge_matrix_side.dtype)
-        # Create a mapping from side columns to real columns
-        # col_read_side: [n_side_cols] map to real column indices (gid or non-feature columns)
-        # We need to find these real columns and their positions in col_read_target
-        # Use a hash map for more stability
-        target_pos = {int(col_read_target[i].item()): i for i in range(col_read_target.numel())}
-        idx_target = torch.tensor([target_pos[int(c.item())] for c in col_read_side], dtype=torch.long)
-        M[:, idx_target] = edge_matrix_side
-        return M
-
-    # Expand both full_edge_matrix to the unified column space
-    em_q_full = expand_to_merged_cols(pkg_q['edge_matrix'], pkg_q['col_read'], col_read_merged)
-    em_k_full = expand_to_merged_cols(pkg_k['edge_matrix'], pkg_k['col_read'], col_read_merged)
-
-    # Merge rows:
-    # - feature rows: The feature rows on both sides are at the top of their respective matrices (at most K rows), and their gids are in row_to_node_index
-    # - Sum rows with duplicate gids, getting "gid -> row vector" aggregation
-    def accumulate_feature_rows(pkg, em_full):
-        row2node = pkg['row_to_node_index'].to('cpu')
-        is_feat_row = row2node < total_active_feats
-        feat_rows = torch.nonzero(is_feat_row, as_tuple=True)[0]
-        acc = {}
-        for r in feat_rows.tolist():
-            gid = int(row2node[r].item())
-            vec = em_full[r]
-            if gid in acc:
-                acc[gid] = acc[gid] + vec
-            else:
-                acc[gid] = vec.clone()
-        return acc
-
-    acc_q = accumulate_feature_rows(pkg_q, em_q_full)
-    acc_k = accumulate_feature_rows(pkg_k, em_k_full)
-
-    # Merge dictionaries and sum duplicates gid
-    acc = acc_q
-    for gid, vec in acc_k.items():
-        acc[gid] = acc.get(gid, torch.zeros_like(vec)) + vec
-
-    # Row order must match selected_union exactly: row i and column i both
-    # correspond to selected_union[i]. If a selected feature has no row on
-    # either Q or K, keep a zero row so later node ranges do not shift.
-    merged_feature_rows = []
-    zero_feature_row = torch.zeros(
-        col_read_merged.numel(),
-        dtype=em_q_full.dtype,
-        device=em_q_full.device,
-    )
-    for gid in selected_union.tolist():
-        merged_feature_rows.append(acc.get(gid, zero_feature_row.clone()))
-    if len(merged_feature_rows) > 0:
-        merged_feature_block = torch.stack(merged_feature_rows, dim=0)
-    else:
-        merged_feature_block = torch.zeros(0, col_read_merged.numel(), dtype=em_q_full.dtype)
-
-    # Merge logit rows: Add the logit rows on both sides element-wise (keep the bottom n_logits rows)
-    logit_rows_q = em_q_full[-n_logits:]
-    logit_rows_k = em_k_full[-n_logits:]
-    merged_logit_block = logit_rows_q + logit_rows_k
-
-    # Assemble the final square matrix (number of nodes = number of columns)
     final_node_count = col_read_merged.numel()
-    full_edge_matrix_merged = torch.zeros(final_node_count, final_node_count, dtype=merged_feature_block.dtype)
-    if merged_feature_block.shape[0] != selected_union.numel():
-        raise RuntimeError(
-            "QK merge row/column alignment failed: "
-            f"{merged_feature_block.shape[0]} feature rows for "
-            f"{selected_union.numel()} selected feature columns."
-        )
-    # Top: feature rows in the same order as selected_union
-    if merged_feature_block.shape[0] > 0:
-        full_edge_matrix_merged[: merged_feature_block.shape[0]] = merged_feature_block
-    # Bottom: logit rows
-    full_edge_matrix_merged[-n_logits:] = merged_logit_block
+    full_edge_matrix_merged = pkg_q["edge_matrix"].new_zeros(
+        (final_node_count, final_node_count)
+    )
+    target_columns, target_order = torch.sort(col_read_merged)
+
+    def column_offsets(pkg):
+        source_columns = pkg["col_read"].to(device)
+        source_in_sorted = torch.searchsorted(target_columns, source_columns)
+        return target_order.index_select(0, source_in_sorted)
+
+    def add_side(pkg):
+        edge_matrix = pkg["edge_matrix"].to(device)
+        col_offsets = column_offsets(pkg)
+        row_to_node = pkg["row_to_node_index"].to(device)
+        feature_rows = torch.nonzero(row_to_node < total_active_feats, as_tuple=True)[0]
+        gids = row_to_node.index_select(0, feature_rows)
+        retained = torch.isin(gids, selected_union)
+        feature_rows = feature_rows[retained]
+        gids = gids[retained]
+        if feature_rows.numel() > 0:
+            selected_offsets = torch.searchsorted(selected_union, gids)
+            feature_values = edge_matrix.index_select(0, feature_rows)
+            full_edge_matrix_merged[
+                selected_offsets[:, None], col_offsets[None, :]
+            ] += feature_values
+        if n_logits > 0:
+            logit_offsets = torch.arange(
+                final_node_count - n_logits,
+                final_node_count,
+                device=device,
+            )
+            full_edge_matrix_merged[
+                logit_offsets[:, None], col_offsets[None, :]
+            ] += edge_matrix[-n_logits:]
+
+    add_side(pkg_q)
+    add_side(pkg_k)
 
     # Merge activation information
     merged_activation_info = None

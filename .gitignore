@@ -203,6 +203,7 @@ ui/bun.lockb
 /graphs
 /circuit_trace_results
 /ui_copy
+/tmp
 
 # Local todo notes
 /todo
