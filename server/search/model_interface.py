@@ -7,11 +7,7 @@ from typing import Optional, Callable, Any
 import sys
 import torch
 import chess
-
-# Add leela_interp directory to sys.path for imports (path aligned with local notebook)
-PROJECT_ROOT = "/inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs/exp/leela-interp/src"
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+from lm_saes.circuit.leela_board import LeelaBoard
 
 DEFAULT_MODEL_NAME = "lc0/BT4-1024x15x32h"
 
@@ -180,9 +176,6 @@ def policy_tensor_to_move_dict(
     Returns:
         Dict mapping UCI move strings to probabilities (normalized over legal moves).
     """
-    import chess
-    from leela_interp import LeelaBoard
-    
     if policy_tensor.dim() > 1:
         policy_logits = policy_tensor[0] if policy_tensor.dim() == 2 else policy_tensor
     else:

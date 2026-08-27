@@ -1,12 +1,8 @@
 import chess
 import torch
 from transformer_lens import HookedTransformer
-import sys
 from lm_saes.lc0_mapping.lc0_mapping import idx_to_uci_mappings
-PROJECT_ROOT = "/inspire/hdd/global_user/hezhengfu-240208120186/rlin_projects/rlin_projects/chess-SAEs/exp/leela-interp/src"
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-from leela_interp import LeelaBoard
+from lm_saes.circuit.leela_board import LeelaBoard
 
 
 def get_move_from_model(model: HookedTransformer, fen: str, return_list: bool = False) -> str:

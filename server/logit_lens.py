@@ -156,7 +156,7 @@ class IntegratedPolicyLens:
         final_all_legals: list[tuple[str, float, float]] = []
         uci2idx_fn = None
         try:
-            from leela_interp import LeelaBoard as _LeelaBoard  # type: ignore
+            from lm_saes.circuit.leela_board import LeelaBoard as _LeelaBoard
             _lb = _LeelaBoard.from_fen(fen, history_synthesis=True)
             uci2idx_fn = _lb.uci2idx
         except Exception:
