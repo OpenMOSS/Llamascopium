@@ -1,5 +1,6 @@
 import json
 import math
+import gc
 import os
 from pathlib import Path
 from typing import Annotated, Any, Callable, Iterable, Literal, Tuple
@@ -186,12 +187,14 @@ class Trainer:
         if checkpoint_dir and not os.path.exists(checkpoint_dir):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
+        self._release_checkpoint_cuda_cache()
         sae.cfg.save_hyperparameters(checkpoint_dir)
         # Save model state
         if sae.device_mesh is None:
             sae.save_checkpoint(checkpoint_dir / "sae_weights.safetensors")
         else:
             sae.save_checkpoint(checkpoint_dir / "sae_weights.dcp")
+        self._release_checkpoint_cuda_cache()
 
         dead_statistics_state = self._dead_statistics_state(sae)
 
@@ -223,7 +226,9 @@ class Trainer:
         if sae.device_mesh is not None and dead_statistics_state is not None:
             dead_statistics_path = checkpoint_dir / "dead_statistics.dcp"
             fs_writer = FileSystemWriter(dead_statistics_path)
+            self._release_checkpoint_cuda_cache()
             dcp.save(dead_statistics_state, storage_writer=fs_writer)
+            self._release_checkpoint_cuda_cache()
         # Save optimizer state - handle distributed tensors
         if self.optimizer is not None:
             if sae.device_mesh is None:
@@ -235,7 +240,9 @@ class Trainer:
                 optimizer_path = checkpoint_dir / "optimizer.dcp"
                 optimizer_state = self.optimizer.state_dict()
                 fs_writer = FileSystemWriter(optimizer_path)
+                self._release_checkpoint_cuda_cache()
                 dcp.save(optimizer_state, storage_writer=fs_writer)
+                self._release_checkpoint_cuda_cache()
 
         # Save scheduler state - handle distributed tensors
         if self.scheduler is not None:
@@ -248,9 +255,18 @@ class Trainer:
                 scheduler_path = checkpoint_dir / "scheduler.dcp"
                 scheduler_state = self.scheduler.state_dict()
                 fs_writer = FileSystemWriter(scheduler_path)
+                self._release_checkpoint_cuda_cache()
                 dcp.save(scheduler_state, storage_writer=fs_writer)
+                self._release_checkpoint_cuda_cache()
 
         logger.info(f"Checkpoint saved to {checkpoint_path}")
+
+    @staticmethod
+    def _release_checkpoint_cuda_cache() -> None:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
 
     @classmethod
     def from_checkpoint(
