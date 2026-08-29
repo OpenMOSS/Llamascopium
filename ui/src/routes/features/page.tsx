@@ -32,6 +32,19 @@ import { ChessBoard } from "@/components/chess/chess-board";
 import { CustomFenInput } from "@/components/feature/custom-fen-input";
 
 let boardCounter = 0;
+const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "").replace(/\/+$/, "");
+
+const backendUrl = (path: string) => `${BACKEND_URL}${path}`;
+
+const fetchFromBackend = async (path: string, init?: RequestInit) => {
+  const url = backendUrl(path);
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Backend request failed (${url}): ${message}`);
+  }
+};
 
 
 export const FeaturesPage = () => {
@@ -46,7 +59,7 @@ export const FeaturesPage = () => {
   const [featureError, setFeatureError] = useState<string | null>(null);
 
   const [dictionariesState, fetchDictionaries] = useAsyncFn(async () => {
-    return await fetch(`${import.meta.env.VITE_BACKEND_URL}/dictionaries`)
+    return await fetchFromBackend("/dictionaries")
       .then(async (res) => await res.json())
       .then((res) => z.array(z.string()).parse(res));
   });
@@ -54,7 +67,7 @@ export const FeaturesPage = () => {
   const [analysesState, fetchAnalyses] = useAsyncFn(async (dictionary: string) => {
     if (!dictionary) return [];
 
-    return await fetch(`${import.meta.env.VITE_BACKEND_URL}/dictionaries/${dictionary}/analyses`)
+    return await fetchFromBackend(`/dictionaries/${encodeURIComponent(dictionary)}/analyses`)
       .then(async (res) => {
         if (!res.ok) {
           throw new Error(await res.text());
@@ -101,10 +114,11 @@ export const FeaturesPage = () => {
       setFeatureError(null);
 
       try {
-        const feature = await fetch(
-          `${
-            import.meta.env.VITE_BACKEND_URL
-          }/dictionaries/${dictionary}/features/${featureIndex}${analysisName ? `?feature_analysis_name=${analysisName}` : ""}`,
+        const query = analysisName
+          ? `?feature_analysis_name=${encodeURIComponent(analysisName)}`
+          : "";
+        const feature = await fetchFromBackend(
+          `/dictionaries/${encodeURIComponent(dictionary)}/features/${featureIndex}${query}`,
           {
         method: "GET",
         headers: {
@@ -589,7 +603,6 @@ export const FeaturesPage = () => {
               flip_activation={Boolean(chessSample.activeColor === 'b')}
               showSelfPlay={true}
               disableAutoAnalyze={true}
-              wdlLoadDelayIndex={index}
             />
           ));
           

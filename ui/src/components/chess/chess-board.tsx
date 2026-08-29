@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 interface ChessBoardProps {
@@ -22,9 +22,7 @@ interface ChessBoardProps {
   autoFlipWhenBlack?: boolean; // auto flip board when black to move
   moveColor?: string; // arrow color (match node color)
   showSelfPlay?: boolean;
-  disableAutoAnalyze?: boolean; // disable auto board analysis to avoid repeated model load
-  /** When set with disableAutoAnalyze, schedule loadWdl after this index * delay (e.g. 1.5s) so WDL loads one-by-one after all boards render */
-  wdlLoadDelayIndex?: number;
+  disableAutoAnalyze?: boolean; // retained for compatibility; WDL is now always user-triggered
 }
 
 // Piece SVG filename map (aligned with exp/chess-board-visualizer, load from pieces dir)
@@ -228,8 +226,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
   autoFlipWhenBlack = false,
   moveColor,
   showSelfPlay = false,
-  disableAutoAnalyze = false,
-  wdlLoadDelayIndex,
 }) => {
 
   // Hover state
@@ -277,32 +273,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
       setBoardAnalysisLoading(false);
     }
   }, [fen, sampleIndex]);
-
-  const handleAnalyze = useCallback(() => {
-    if (disableAutoAnalyze) return;
-    loadWdl();
-  }, [disableAutoAnalyze, loadWdl]);
-
-  // Defer auto WDL to next tick so the board renders first
-  useEffect(() => {
-    if (disableAutoAnalyze) return;
-    const t = setTimeout(() => handleAnalyze(), 0);
-    return () => clearTimeout(t);
-  }, [handleAnalyze, disableAutoAnalyze]);
-
-  // When disableAutoAnalyze + wdlLoadDelayIndex: after all boards render, load WDL one-by-one (index * 1.5s)
-  const [wdlAutoScheduled, setWdlAutoScheduled] = useState(false);
-  const WDL_STAGGER_MS = 1500;
-  useEffect(() => {
-    if (!disableAutoAnalyze || wdlLoadDelayIndex === undefined) return;
-    setWdlAutoScheduled(true);
-    const delay = wdlLoadDelayIndex * WDL_STAGGER_MS;
-    const t = setTimeout(() => loadWdl(), delay);
-    return () => {
-      clearTimeout(t);
-      setWdlAutoScheduled(false);
-    };
-  }, [disableAutoAnalyze, wdlLoadDelayIndex, loadWdl]);
 
   // Forward inference
   const handleForwardInference = useCallback(async () => {
@@ -827,9 +797,7 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
           <div className="mt-1 text-sm text-gray-500">Loading WDL...</div>
         ) : boardAnalysisError ? (
           <div className="mt-1 text-sm text-red-600">{boardAnalysisError}</div>
-        ) : disableAutoAnalyze && wdlLoadDelayIndex !== undefined && wdlAutoScheduled ? (
-          <div className="mt-1 text-sm text-gray-500">Loading WDL...</div>
-        ) : disableAutoAnalyze ? (
+        ) : (
           <button
             type="button"
             onClick={() => loadWdl()}
@@ -837,8 +805,6 @@ export const ChessBoard: React.FC<ChessBoardProps> = ({
           >
             Get WDL
           </button>
-        ) : (
-          <div className="mt-1 text-sm text-gray-700">Analyzing position...</div>
         )}
       </div>
 

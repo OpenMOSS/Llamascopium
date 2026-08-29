@@ -19,6 +19,7 @@ for _path in (REPO_ROOT, REPO_ROOT / "src", REPO_ROOT / "server"):
         sys.path.insert(0, str(_path))
 
 from server.constants import BT4_MODEL_NAME, get_bt4_sae_combo
+from server.circuit_trace_defaults import DEFAULT_VJP_BATCH_SIZE
 from server.circuits_service import create_graph_from_attribution, load_model_and_transcoders, run_attribution
 from lm_saes.circuit.graph_lc0 import Graph, compute_graph_scores
 from lm_saes.circuit.leela_board import LeelaBoard
@@ -216,6 +217,7 @@ def build_graph_for_case(
     max_n_logits: int = 1,
     desired_logit_prob: float = 0.95,
     batch_size: int = 1,
+    vjp_batch_size: int = DEFAULT_VJP_BATCH_SIZE,
     order_mode: str = "positive",
     save_activation_info: bool = True,
 ) -> tuple[Graph, dict[str, Any], EvalCase]:
@@ -231,6 +233,7 @@ def build_graph_for_case(
         desired_logit_prob=desired_logit_prob,
         max_feature_nodes=max_feature_nodes,
         batch_size=batch_size,
+        vjp_batch_size=vjp_batch_size,
         order_mode=order_mode,
         mongo_client=None,
         sae_series=bundle.sae_series,

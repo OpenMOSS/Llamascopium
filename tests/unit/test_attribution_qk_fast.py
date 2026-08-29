@@ -176,11 +176,12 @@ class _CountingContext:
 
     def __init__(self):
         self.calls = 0
+        self.scale = torch.tensor(1.0, requires_grad=True)
 
     def compute_vjp_batch(self, layers, positions, inject_values, attention_patterns, retain_graph):
         self.calls += 1
         gids = inject_values[:, 0]
-        return torch.stack((gids + 1, gids + 2, gids + 3), dim=1)
+        return torch.stack((gids + 1, gids + 2, gids + 3), dim=1) * self.scale
 
 
 def test_joint_qk_feature_trace_reuses_rows_between_sides():
@@ -212,5 +213,9 @@ def test_joint_qk_feature_trace_reuses_rows_between_sides():
 
     assert ctx.calls == 1
     assert torch.equal(result["q"]["edge_matrix"], result["k"]["edge_matrix"])
+    assert not result["q"]["edge_matrix"].requires_grad
+    assert not result["k"]["edge_matrix"].requires_grad
+    assert not result["q"]["normalized_matrix"].requires_grad
+    assert not result["k"]["normalized_matrix"].requires_grad
     assert result["q"]["visited"].all()
     assert result["k"]["visited"].all()

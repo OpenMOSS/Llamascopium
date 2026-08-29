@@ -2194,7 +2194,11 @@ def run_joint_feature_attribution(
                         attention_patterns=patterns,
                         retain_graph=True,
                     )
-                    chunks.append(rows.to(union_rows.dtype))
+                    # Attribution rows are final numeric results. Keeping their
+                    # parameter-side grad_fn here makes every slice assignment
+                    # extend the edge matrix's autograd history across all
+                    # feature batches, causing GPU memory to grow linearly.
+                    chunks.append(rows.detach().to(union_rows.dtype))
                 union_rows[~cached] = torch.cat(chunks, dim=0)
 
             newly_cached: List[Tuple[str, torch.Tensor, torch.Tensor]] = []
@@ -2772,10 +2776,11 @@ def _run_attribution(
             castle_tensor=torch.full((n_logits,), is_castle, device=policy_out.device),
             retain_graph=True,
         )
-        rows_q_last, rows_k_last = rows_q, rows_k
+        rows_q_last, rows_k_last = rows_q.detach(), rows_k.detach()
         for requested, rows in (("q", rows_q), ("k", rows_k)):
             if requested not in edge_matrices:
                 continue
+            rows = rows.detach()
             edge_matrices[requested][:n_logits, :logit_offset] = rows.to(edge_dtype)
             normalized_matrices[requested][:n_logits, :logit_offset] = _normalize_rows(
                 rows, influence_sign_mode
