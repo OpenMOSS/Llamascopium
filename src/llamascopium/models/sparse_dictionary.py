@@ -809,7 +809,9 @@ class SparseDictionary(HookedRootModule, ABC):
         self,
         batch: dict[str, torch.Tensor],
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
+        sparsity_loss_type: Literal[
+            "power", "tanh", "tanh-quad", "jumprelu-l0-quad", "jumprelu-l0-mean-quad", None
+        ] = None,
         tanh_stretch_coefficient: float = 4.0,
         p: int = 1,
         target_l0: float | None = None,
@@ -828,7 +830,9 @@ class SparseDictionary(HookedRootModule, ABC):
         self,
         batch: dict[str, torch.Tensor],
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
+        sparsity_loss_type: Literal[
+            "power", "tanh", "tanh-quad", "jumprelu-l0-quad", "jumprelu-l0-mean-quad", None
+        ] = None,
         tanh_stretch_coefficient: float = 4.0,
         p: int = 1,
         target_l0: float | None = None,
@@ -854,7 +858,9 @@ class SparseDictionary(HookedRootModule, ABC):
             | None
         ) = None,
         *,
-        sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None,
+        sparsity_loss_type: Literal[
+            "power", "tanh", "tanh-quad", "jumprelu-l0-quad", "jumprelu-l0-mean-quad", None
+        ] = None,
         tanh_stretch_coefficient: float = 4.0,
         frequency_scale: float = 0.01,
         p: int = 1,
@@ -921,12 +927,12 @@ class SparseDictionary(HookedRootModule, ABC):
                                 "mean",
                             )
                         l_s = (approx_frequency * (1 + approx_frequency / frequency_scale)).sum(dim=-1)
-                    elif sparsity_loss_type == "jumprelu-l0-quad":
+                    elif sparsity_loss_type in ("jumprelu-l0-quad", "jumprelu-l0-mean-quad"):
                         assert isinstance(self.activation_function, JumpReLU), (
-                            "jumprelu-l0-quad sparsity loss requires JumpReLU activation"
+                            f"{sparsity_loss_type} sparsity loss requires JumpReLU activation"
                         )
                         assert target_l0 is not None and target_l0 > 0, (
-                            "target_l0 must be positive for jumprelu-l0-quad sparsity loss"
+                            f"target_l0 must be positive for {sparsity_loss_type} sparsity loss"
                         )
                         hidden_pre_for_l0_loss = (
                             hidden_pre * self.decoder_norm()
@@ -934,12 +940,17 @@ class SparseDictionary(HookedRootModule, ABC):
                             else hidden_pre
                         )
                         l0 = self.activation_function.l0(hidden_pre_for_l0_loss).sum(dim=-1)
-                        l_s = (2 / target_l0) * (l0 - target_l0).pow(2)
+                        if sparsity_loss_type == "jumprelu-l0-mean-quad":
+                            mean_l0, _ = apply_token_mask(l0, self.specs.loss(l0), batch.get("mask"), "mean")
+                            l_s = (2 / target_l0) * (mean_l0 - target_l0).pow(2)
+                        else:
+                            l_s = (2 / target_l0) * (l0 - target_l0).pow(2)
                     else:
                         raise ValueError(f"sparsity_loss_type f{sparsity_loss_type} not supported.")
                     l_s = l1_coefficient * l_s
                     loss_dict["l_s"] = l_s
-                    l_s, _ = apply_token_mask(l_s, self.specs.loss(l_s), batch.get("mask"), "mean")
+                    if l_s.ndim > 0:
+                        l_s, _ = apply_token_mask(l_s, self.specs.loss(l_s), batch.get("mask"), "mean")
                     loss = loss + l_s
             else:
                 loss_dict["l_s"] = None
