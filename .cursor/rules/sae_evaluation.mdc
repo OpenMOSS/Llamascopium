@@ -1,0 +1,41 @@
+---
+description: Evaluation overviews for Sparse Autoencoders
+globs: 
+alwaysApply: false
+---
+# SAE Evaluation and Analysis
+
+Evaluating Sparse Autoencoders involves multiple metrics and analysis techniques to assess both quantitative performance and qualitative interpretability.
+
+## Evaluation Metrics
+
+1. **Sparsity-Fidelity Tradeoff**
+   - L0 Sparsity: Average number of active features per sample
+   - Explained Variance: Proportion of variance in the original activations explained by the SAE
+   - Delta LM Loss: Impact on language model loss when using reconstructed activations
+
+2. **Feature Characteristics**
+   - Activation Frequency: How often each feature activates across the dataset
+   - Monosemanticity: Whether each feature represents a single, interpretable concept
+   - Out-of-Distribution Generalization: Performance on contexts different from training data
+
+The evaluation process is implemented in [src/lm_saes/evaluator.py](mdc:src/lm_saes/evaluator.py).
+
+## Analysis Tools
+
+This codebase provides tools for analyzing SAEs through:
+
+1. **Feature Visualization**: Examining which tokens/inputs maximally activate each feature
+2. **Feature Geometry**: Analyzing the relationships between features in the latent space
+3. **Circuit Analysis**: Understanding how features interact in the context of the larger model
+
+Analysis configurations can be specified through TOML files as shown in [examples/configuration/analyze.toml](mdc:examples/configuration/analyze.toml).
+
+## Visualization
+
+Results from analysis can be visualized through a web interface:
+
+1. A FastAPI backend served with `uvicorn server.app:app`
+2. A frontend for interactive exploration of features and their properties
+
+The visualization makes it easier to identify patterns and interpret the meaning of learned features.

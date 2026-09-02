@@ -5,59 +5,100 @@
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
 
-\bibitem[Ainslie et~al.(2023)Ainslie, Lee{-}Thorp, de~Jong, Zemlyanskiy, Lebr{\'{o}}n, and Sanghai]{joshua2023gqa}
-Joshua Ainslie, James Lee{-}Thorp, Michiel de~Jong, Yury Zemlyanskiy, Federico Lebr{\'{o}}n, and Sumit Sanghai.
-\newblock {GQA:} training generalized multi-query transformer models from multi-head checkpoints.
-\newblock In Houda Bouamor, Juan Pino, and Kalika Bali (eds.), \emph{Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing, {EMNLP} 2023, Singapore, December 6-10, 2023}, pp.\  4895--4901. Association for Computational Linguistics, 2023.
+\bibitem[Ainslie et~al.(2023)Ainslie, Lee{-}Thorp, de~Jong, Zemlyanskiy,
+  Lebr{\'{o}}n, and Sanghai]{joshua2023gqa}
+Joshua Ainslie, James Lee{-}Thorp, Michiel de~Jong, Yury Zemlyanskiy, Federico
+  Lebr{\'{o}}n, and Sumit Sanghai.
+\newblock {GQA:} training generalized multi-query transformer models from
+  multi-head checkpoints.
+\newblock In Houda Bouamor, Juan Pino, and Kalika Bali (eds.),
+  \emph{Proceedings of the 2023 Conference on Empirical Methods in Natural
+  Language Processing, {EMNLP} 2023, Singapore, December 6-10, 2023}, pp.\
+  4895--4901. Association for Computational Linguistics, 2023.
 \newblock \doi{10.18653/V1/2023.EMNLP-MAIN.298}.
 \newblock URL \url{https://doi.org/10.18653/v1/2023.emnlp-main.298}.
 
-\bibitem[Ameisen et~al.(2025)Ameisen, Lindsey, Pearce, Gurnee, Turner, Chen, Citro, Abrahams, Carter, Hosmer, Marcus, Sklar, Templeton, Bricken, McDougall, Cunningham, Henighan, Jermyn, Jones, Persic, Qi, Ben~Thompson, Zimmerman, Rivoire, Conerly, Olah, and Batson]{ameisen2025circuit}
-Emmanuel Ameisen, Jack Lindsey, Adam Pearce, Wes Gurnee, Nicholas~L. Turner, Brian Chen, Craig Citro, David Abrahams, Shan Carter, Basil Hosmer, Jonathan Marcus, Michael Sklar, Adly Templeton, Trenton Bricken, Callum McDougall, Hoagy Cunningham, Thomas Henighan, Adam Jermyn, Andy Jones, Andrew Persic, Zhenyi Qi, T.~Ben~Thompson, Sam Zimmerman, Kelley Rivoire, Thomas Conerly, Chris Olah, and Joshua Batson.
+\bibitem[Ameisen et~al.(2025)Ameisen, Lindsey, Pearce, Gurnee, Turner, Chen,
+  Citro, Abrahams, Carter, Hosmer, Marcus, Sklar, Templeton, Bricken,
+  McDougall, Cunningham, Henighan, Jermyn, Jones, Persic, Qi, Ben~Thompson,
+  Zimmerman, Rivoire, Conerly, Olah, and Batson]{ameisen2025circuit}
+Emmanuel Ameisen, Jack Lindsey, Adam Pearce, Wes Gurnee, Nicholas~L. Turner,
+  Brian Chen, Craig Citro, David Abrahams, Shan Carter, Basil Hosmer, Jonathan
+  Marcus, Michael Sklar, Adly Templeton, Trenton Bricken, Callum McDougall,
+  Hoagy Cunningham, Thomas Henighan, Adam Jermyn, Andy Jones, Andrew Persic,
+  Zhenyi Qi, T.~Ben~Thompson, Sam Zimmerman, Kelley Rivoire, Thomas Conerly,
+  Chris Olah, and Joshua Batson.
 \newblock Circuit tracing: Revealing computational graphs in language models.
 \newblock \emph{Transformer Circuits Thread}, 2025.
-\newblock URL \url{https://transformer-circuits.pub/2025/attribution-graphs/methods.html}.
+\newblock URL
+  \url{https://transformer-circuits.pub/2025/attribution-graphs/methods.html}.
 
-\bibitem[Bricken et~al.(2023)Bricken, Templeton, Batson, Chen, Jermyn, Conerly, Turner, Anil, Denison, Askell, Lasenby, Wu, Kravec, Schiefer, Maxwell, Joseph, Hatfield-Dodds, Tamkin, Nguyen, McLean, Burke, Hume, Carter, Henighan, and Olah]{bricken2023monosemanticity}
-Trenton Bricken, Adly Templeton, Joshua Batson, Brian Chen, Adam Jermyn, Tom Conerly, Nick Turner, Cem Anil, Carson Denison, Amanda Askell, Robert Lasenby, Yifan Wu, Shauna Kravec, Nicholas Schiefer, Tim Maxwell, Nicholas Joseph, Zac Hatfield-Dodds, Alex Tamkin, Karina Nguyen, Brayden McLean, Josiah~E Burke, Tristan Hume, Shan Carter, Tom Henighan, and Christopher Olah.
-\newblock Towards monosemanticity: Decomposing language models with dictionary learning.
+\bibitem[Bricken et~al.(2023)Bricken, Templeton, Batson, Chen, Jermyn, Conerly,
+  Turner, Anil, Denison, Askell, Lasenby, Wu, Kravec, Schiefer, Maxwell,
+  Joseph, Hatfield-Dodds, Tamkin, Nguyen, McLean, Burke, Hume, Carter,
+  Henighan, and Olah]{bricken2023monosemanticity}
+Trenton Bricken, Adly Templeton, Joshua Batson, Brian Chen, Adam Jermyn, Tom
+  Conerly, Nick Turner, Cem Anil, Carson Denison, Amanda Askell, Robert
+  Lasenby, Yifan Wu, Shauna Kravec, Nicholas Schiefer, Tim Maxwell, Nicholas
+  Joseph, Zac Hatfield-Dodds, Alex Tamkin, Karina Nguyen, Brayden McLean,
+  Josiah~E Burke, Tristan Hume, Shan Carter, Tom Henighan, and Christopher
+  Olah.
+\newblock Towards monosemanticity: Decomposing language models with dictionary
+  learning.
 \newblock \emph{Transformer Circuits Thread}, 2023.
-\newblock https://transformer-circuits.pub/2023/monosemantic-features/index.html.
+\newblock
+  https://transformer-circuits.pub/2023/monosemantic-features/index.html.
 
-\bibitem[Bussmann et~al.(2025)Bussmann, Nabeshima, Karvonen, and Nanda]{bussmann2025matryoshka}
+\bibitem[Bussmann et~al.(2025)Bussmann, Nabeshima, Karvonen, and
+  Nanda]{bussmann2025matryoshka}
 Bart Bussmann, Noa Nabeshima, Adam Karvonen, and Neel Nanda.
 \newblock Learning multi-level features with matryoshka sparse autoencoders.
-\newblock In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste{-}Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu (eds.), \emph{Forty-second International Conference on Machine Learning, {ICML} 2025, Vancouver, BC, Canada, July 13-19, 2025}, volume 267 of \emph{Proceedings of Machine Learning Research}. {PMLR} / OpenReview.net, 2025.
+\newblock In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste{-}Julien,
+  Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu (eds.),
+  \emph{Forty-second International Conference on Machine Learning, {ICML} 2025,
+  Vancouver, BC, Canada, July 13-19, 2025}, volume 267 of \emph{Proceedings of
+  Machine Learning Research}. {PMLR} / OpenReview.net, 2025.
 \newblock URL \url{https://proceedings.mlr.press/v267/bussmann25a.html}.
 
-\bibitem[Chen et~al.(2025)Chen, Arditi, Sleight, Evans, and Lindsey]{chen2025persona}
+\bibitem[Chen et~al.(2025)Chen, Arditi, Sleight, Evans, and
+  Lindsey]{chen2025persona}
 Runjin Chen, Andy Arditi, Henry Sleight, Owain Evans, and Jack Lindsey.
-\newblock Persona vectors: Monitoring and controlling character traits in language models.
+\newblock Persona vectors: Monitoring and controlling character traits in
+  language models.
 \newblock \emph{CoRR}, abs/2507.21509, 2025.
 \newblock \doi{10.48550/ARXIV.2507.21509}.
 \newblock URL \url{https://doi.org/10.48550/arXiv.2507.21509}.
 
-\bibitem[Cunningham \& Conerly(2024)Cunningham and Conerly]{cunningham2024circuits}
+\bibitem[Cunningham \& Conerly(2024)Cunningham and
+  Conerly]{cunningham2024circuits}
 Hoagy Cunningham and Tom Conerly.
 \newblock Circuits updates - june 2024.
 \newblock Transformer Circuits Thread, 2024.
-\newblock URL \url{https://transformer-circuits.pub/2024/june-update/index.html}.
+\newblock URL
+  \url{https://transformer-circuits.pub/2024/june-update/index.html}.
 
-\bibitem[Cunningham et~al.(2023)Cunningham, Ewart, Riggs, Huben, and Sharkey]{cunningham2023sae}
+\bibitem[Cunningham et~al.(2023)Cunningham, Ewart, Riggs, Huben, and
+  Sharkey]{cunningham2023sae}
 Hoagy Cunningham, Aidan Ewart, Logan Riggs, Robert Huben, and Lee Sharkey.
-\newblock Sparse autoencoders find highly interpretable features in language models.
+\newblock Sparse autoencoders find highly interpretable features in language
+  models.
 \newblock \emph{CoRR}, abs/2309.08600, 2023.
 \newblock \doi{10.48550/ARXIV.2309.08600}.
 \newblock URL \url{https://doi.org/10.48550/arXiv.2309.08600}.
 
-\bibitem[Deng et~al.(2026)Deng, Wang, Wang, Wan, Ma, Yang, Wei, Tang, Lin, Gao, Li, Cao, Ren, Deng, Yang, Huang, Liu, and Zhou]{deng2026qwenscope}
-Boyi Deng, Xu~Wang, Yaoning Wang, Yu~Wan, Yubo Ma, Baosong Yang, Haoran Wei, Jialong Tang, Huan Lin, Ruize Gao, Tianhao Li, Qian Cao, Xuancheng Ren, Xiaodong Deng, An~Yang, Fei Huang, Dayiheng Liu, and Jingren Zhou.
-\newblock Qwen-scope: Turning sparse features into development tools for large language models.
+\bibitem[Deng et~al.(2026)Deng, Wang, Wang, Wan, Ma, Yang, Wei, Tang, Lin, Gao,
+  Li, Cao, Ren, Deng, Yang, Huang, Liu, and Zhou]{deng2026qwenscope}
+Boyi Deng, Xu~Wang, Yaoning Wang, Yu~Wan, Yubo Ma, Baosong Yang, Haoran Wei,
+  Jialong Tang, Huan Lin, Ruize Gao, Tianhao Li, Qian Cao, Xuancheng Ren,
+  Xiaodong Deng, An~Yang, Fei Huang, Dayiheng Liu, and Jingren Zhou.
+\newblock Qwen-scope: Turning sparse features into development tools for large
+  language models.
 \newblock \emph{CoRR}, abs/2605.11887, 2026.
 \newblock \doi{10.48550/ARXIV.2605.11887}.
 \newblock URL \url{https://doi.org/10.48550/arXiv.2605.11887}.
 
-\bibitem[Dunefsky et~al.(2024)Dunefsky, Chlenski, and Nanda]{dunefsky2024transcoder}
+\bibitem[Dunefsky et~al.(2024)Dunefsky, Chlenski, and
+  Nanda]{dunefsky2024transcoder}
 Jacob Dunefsky, Philippe Chlenski, and Neel Nanda.
 \newblock Transcoders find interpretable {LLM} feature circuits.
 \newblock \emph{CoRR}, abs/2406.11944, 2024.
@@ -69,76 +110,127 @@ Leo Gao et~al.
 \newblock Scaling and evaluating sparse autoencoders.
 \newblock \emph{arXiv preprint arXiv:2406.04093}, 2024.
 
-\bibitem[Grattafiori et~al.(2024)Grattafiori, Dubey, Jauhri, Pandey, Kadian, Al-Dahle, Letman, Mathur, Schelten, Vaughan, et~al.]{grattafiori2024llama}
-Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex Vaughan, et~al.
+\bibitem[Grattafiori et~al.(2024)Grattafiori, Dubey, Jauhri, Pandey, Kadian,
+  Al-Dahle, Letman, Mathur, Schelten, Vaughan, et~al.]{grattafiori2024llama}
+Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri, Abhinav Pandey, Abhishek
+  Kadian, Ahmad Al-Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten, Alex
+  Vaughan, et~al.
 \newblock The llama 3 herd of models.
 \newblock \emph{arXiv preprint arXiv:2407.21783}, 2024.
 
-\bibitem[He et~al.(2024)He, Shu, Ge, Chen, Wang, Zhou, Liu, Guo, Huang, Wu, Jiang, and Qiu]{he2024llamascope}
-Zhengfu He, Wentao Shu, Xuyang Ge, Lingjie Chen, Junxuan Wang, Yunhua Zhou, Frances Liu, Qipeng Guo, Xuanjing Huang, Zuxuan Wu, Yu-Gang Jiang, and Xipeng Qiu.
-\newblock Llama scope: Extracting millions of features from llama-3.1-8b with sparse autoencoders.
+\bibitem[He et~al.(2024)He, Shu, Ge, Chen, Wang, Zhou, Liu, Guo, Huang, Wu,
+  Jiang, and Qiu]{he2024llamascope}
+Zhengfu He, Wentao Shu, Xuyang Ge, Lingjie Chen, Junxuan Wang, Yunhua Zhou,
+  Frances Liu, Qipeng Guo, Xuanjing Huang, Zuxuan Wu, Yu-Gang Jiang, and Xipeng
+  Qiu.
+\newblock Llama scope: Extracting millions of features from llama-3.1-8b with
+  sparse autoencoders.
 \newblock \emph{arXiv preprint arXiv:2410.20526}, 2024.
 
 \bibitem[He et~al.(2025)]{he2025lorsa}
 Zhengfu He et~al.
-\newblock Towards understanding the nature of attention with low-rank sparse decomposition.
+\newblock Towards understanding the nature of attention with low-rank sparse
+  decomposition.
 \newblock \emph{arXiv preprint arXiv:2504.20938}, 2025.
 
-\bibitem[Karvonen et~al.(2025)Karvonen, Rager, Lin, Tigges, Bloom, Chanin, Lau, Farrell, McDougall, Ayonrinde, Till, Wearden, Conmy, Marks, and Nanda]{karvonen2025saebench}
-Adam Karvonen, Can Rager, Johnny Lin, Curt Tigges, Joseph~Isaac Bloom, David Chanin, Yeu{-}Tong Lau, Eoin Farrell, Callum McDougall, Kola Ayonrinde, Demian Till, Matthew Wearden, Arthur Conmy, Samuel Marks, and Neel Nanda.
-\newblock Saebench: {A} comprehensive benchmark for sparse autoencoders in language model interpretability.
-\newblock In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste{-}Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu (eds.), \emph{Forty-second International Conference on Machine Learning, {ICML} 2025, Vancouver, BC, Canada, July 13-19, 2025}, volume 267 of \emph{Proceedings of Machine Learning Research}. {PMLR} / OpenReview.net, 2025.
+\bibitem[Karvonen et~al.(2025)Karvonen, Rager, Lin, Tigges, Bloom, Chanin, Lau,
+  Farrell, McDougall, Ayonrinde, Till, Wearden, Conmy, Marks, and
+  Nanda]{karvonen2025saebench}
+Adam Karvonen, Can Rager, Johnny Lin, Curt Tigges, Joseph~Isaac Bloom, David
+  Chanin, Yeu{-}Tong Lau, Eoin Farrell, Callum McDougall, Kola Ayonrinde,
+  Demian Till, Matthew Wearden, Arthur Conmy, Samuel Marks, and Neel Nanda.
+\newblock Saebench: {A} comprehensive benchmark for sparse autoencoders in
+  language model interpretability.
+\newblock In Aarti Singh, Maryam Fazel, Daniel Hsu, Simon Lacoste{-}Julien,
+  Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and Jerry Zhu (eds.),
+  \emph{Forty-second International Conference on Machine Learning, {ICML} 2025,
+  Vancouver, BC, Canada, July 13-19, 2025}, volume 267 of \emph{Proceedings of
+  Machine Learning Research}. {PMLR} / OpenReview.net, 2025.
 \newblock URL \url{https://proceedings.mlr.press/v267/karvonen25a.html}.
 
-\bibitem[Lieberum et~al.(2024)Lieberum, Rajamanoharan, Conmy, Smith, Sonnerat, Varma, Kram{\'a}r, Dragan, Shah, and Nanda]{lieberum2024gemma}
-Tom Lieberum, Senthooran Rajamanoharan, Arthur Conmy, Lewis Smith, Nicolas Sonnerat, Vikrant Varma, J{\'a}nos Kram{\'a}r, Anca Dragan, Rohin Shah, and Neel Nanda.
-\newblock Gemma scope: Open sparse autoencoders everywhere all at once on gemma 2.
-\newblock In \emph{Proceedings of the 7th BlackboxNLP Workshop: Analyzing and Interpreting Neural Networks for NLP}, pp.\  278--300, 2024.
+\bibitem[Lieberum et~al.(2024)Lieberum, Rajamanoharan, Conmy, Smith, Sonnerat,
+  Varma, Kram{\'a}r, Dragan, Shah, and Nanda]{lieberum2024gemma}
+Tom Lieberum, Senthooran Rajamanoharan, Arthur Conmy, Lewis Smith, Nicolas
+  Sonnerat, Vikrant Varma, J{\'a}nos Kram{\'a}r, Anca Dragan, Rohin Shah, and
+  Neel Nanda.
+\newblock Gemma scope: Open sparse autoencoders everywhere all at once on gemma
+  2.
+\newblock In \emph{Proceedings of the 7th BlackboxNLP Workshop: Analyzing and
+  Interpreting Neural Networks for NLP}, pp.\  278--300, 2024.
 
-\bibitem[McDougall et~al.(2025)McDougall, Conmy, Kram{\'a}r, Lieberum, Rajamanoharan, and Nanda]{mcdougall2025gemmascope2}
-Callum McDougall, Arthur Conmy, J{\'a}nos Kram{\'a}r, Tom Lieberum, Senthooran Rajamanoharan, and Neel Nanda.
+\bibitem[McDougall et~al.(2025)McDougall, Conmy, Kram{\'a}r, Lieberum,
+  Rajamanoharan, and Nanda]{mcdougall2025gemmascope2}
+Callum McDougall, Arthur Conmy, J{\'a}nos Kram{\'a}r, Tom Lieberum, Senthooran
+  Rajamanoharan, and Neel Nanda.
 \newblock Gemma scope 2: Technical paper.
 \newblock Technical report, Google DeepMind, 2025.
 
-\bibitem[Penedo et~al.(2024)Penedo, Kydl{\'{\i}}cek, Allal, Lozhkov, Mitchell, Raffel, von Werra, and Wolf]{penedo2024fineweb}
-Guilherme Penedo, Hynek Kydl{\'{\i}}cek, Loubna~Ben Allal, Anton Lozhkov, Margaret Mitchell, Colin~A. Raffel, Leandro von Werra, and Thomas Wolf.
-\newblock The fineweb datasets: Decanting the web for the finest text data at scale.
-\newblock In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan, Ulrich Paquet, Jakub~M. Tomczak, and Cheng Zhang (eds.), \emph{Advances in Neural Information Processing Systems 37: Annual Conference on Neural Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada, December 10 - 15, 2024}, 2024.
-\newblock URL \url{http://papers.nips.cc/paper\_files/paper/2024/hash/370df50ccfdf8bde18f8f9c2d9151bda-Abstract-Datasets\_and\_Benchmarks\_Track.html}.
+\bibitem[Penedo et~al.(2024)Penedo, Kydl{\'{\i}}cek, Allal, Lozhkov, Mitchell,
+  Raffel, von Werra, and Wolf]{penedo2024fineweb}
+Guilherme Penedo, Hynek Kydl{\'{\i}}cek, Loubna~Ben Allal, Anton Lozhkov,
+  Margaret Mitchell, Colin~A. Raffel, Leandro von Werra, and Thomas Wolf.
+\newblock The fineweb datasets: Decanting the web for the finest text data at
+  scale.
+\newblock In Amir Globersons, Lester Mackey, Danielle Belgrave, Angela Fan,
+  Ulrich Paquet, Jakub~M. Tomczak, and Cheng Zhang (eds.), \emph{Advances in
+  Neural Information Processing Systems 37: Annual Conference on Neural
+  Information Processing Systems 2024, NeurIPS 2024, Vancouver, BC, Canada,
+  December 10 - 15, 2024}, 2024.
+\newblock URL
+  \url{http://papers.nips.cc/paper\_files/paper/2024/hash/370df50ccfdf8bde18f8f9c2d9151bda-Abstract-Datasets\_and\_Benchmarks\_Track.html}.
 
-\bibitem[Rajamanoharan et~al.(2024)Rajamanoharan, Lieberum, Sonnerat, Conmy, Varma, Kram{\'{a}}r, and Nanda]{rajamanoharan2024jumprelu}
-Senthooran Rajamanoharan, Tom Lieberum, Nicolas Sonnerat, Arthur Conmy, Vikrant Varma, J{\'{a}}nos Kram{\'{a}}r, and Neel Nanda.
-\newblock Jumping ahead: Improving reconstruction fidelity with jumprelu sparse autoencoders.
+\bibitem[Rajamanoharan et~al.(2024)Rajamanoharan, Lieberum, Sonnerat, Conmy,
+  Varma, Kram{\'{a}}r, and Nanda]{rajamanoharan2024jumprelu}
+Senthooran Rajamanoharan, Tom Lieberum, Nicolas Sonnerat, Arthur Conmy, Vikrant
+  Varma, J{\'{a}}nos Kram{\'{a}}r, and Neel Nanda.
+\newblock Jumping ahead: Improving reconstruction fidelity with jumprelu sparse
+  autoencoders.
 \newblock \emph{CoRR}, abs/2407.14435, 2024.
 \newblock \doi{10.48550/ARXIV.2407.14435}.
 \newblock URL \url{https://doi.org/10.48550/arXiv.2407.14435}.
 
-\bibitem[Rimsky et~al.(2024)Rimsky, Gabrieli, Schulz, Tong, Hubinger, and Turner]{rimsky2024steering}
-Nina Rimsky, Nick Gabrieli, Julian Schulz, Meg Tong, Evan Hubinger, and Alexander~Matt Turner.
+\bibitem[Rimsky et~al.(2024)Rimsky, Gabrieli, Schulz, Tong, Hubinger, and
+  Turner]{rimsky2024steering}
+Nina Rimsky, Nick Gabrieli, Julian Schulz, Meg Tong, Evan Hubinger, and
+  Alexander~Matt Turner.
 \newblock Steering llama 2 via contrastive activation addition.
-\newblock In Lun{-}Wei Ku, Andre Martins, and Vivek Srikumar (eds.), \emph{Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024}, pp.\  15504--15522. Association for Computational Linguistics, 2024.
+\newblock In Lun{-}Wei Ku, Andre Martins, and Vivek Srikumar (eds.),
+  \emph{Proceedings of the 62nd Annual Meeting of the Association for
+  Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok,
+  Thailand, August 11-16, 2024}, pp.\  15504--15522. Association for
+  Computational Linguistics, 2024.
 \newblock \doi{10.18653/V1/2024.ACL-LONG.828}.
 \newblock URL \url{https://doi.org/10.18653/v1/2024.acl-long.828}.
 
-\bibitem[Shu et~al.(2026)Shu, Ge, Zhou, Wang, Lin, Song, Wu, He, and Qiu]{shu2026completereplacement}
-Wentao Shu, Xuyang Ge, Guancheng Zhou, Junxuan Wang, Rui Lin, Zhaoxuan Song, Jiaxing Wu, Zhengfu He, and Xipeng Qiu.
-\newblock Bridging the attention gap: Complete replacement models for complete circuit tracing.
+\bibitem[Shu et~al.(2026)Shu, Ge, Zhou, Wang, Lin, Song, Wu, He, and
+  Qiu]{shu2026completereplacement}
+Wentao Shu, Xuyang Ge, Guancheng Zhou, Junxuan Wang, Rui Lin, Zhaoxuan Song,
+  Jiaxing Wu, Zhengfu He, and Xipeng Qiu.
+\newblock Bridging the attention gap: Complete replacement models for complete
+  circuit tracing.
 \newblock \emph{OpenMOSS Interpretability Research}, 2026.
 \newblock URL \url{https://interp.open-moss.com/posts/complete-replacement}.
 
-\bibitem[Team et~al.(2025)Team, Kamath, Ferret, Pathak, Vieillard, Merhej, Perrin, Matejovicova, Ram{\'e}, Rivi{\`e}re, et~al.]{team2025gemma}
-Gemma Team, Aishwarya Kamath, Johan Ferret, Shreya Pathak, Nino Vieillard, Ramona Merhej, Sarah Perrin, Tatiana Matejovicova, Alexandre Ram{\'e}, Morgane Rivi{\`e}re, et~al.
+\bibitem[Team et~al.(2025)Team, Kamath, Ferret, Pathak, Vieillard, Merhej,
+  Perrin, Matejovicova, Ram{\'e}, Rivi{\`e}re, et~al.]{team2025gemma}
+Gemma Team, Aishwarya Kamath, Johan Ferret, Shreya Pathak, Nino Vieillard,
+  Ramona Merhej, Sarah Perrin, Tatiana Matejovicova, Alexandre Ram{\'e},
+  Morgane Rivi{\`e}re, et~al.
 \newblock Gemma 3 technical report.
 \newblock \emph{arXiv preprint arXiv:2503.19786}, 2025.
 
 \bibitem[Wang et~al.(2026)Wang, Ge, Shu, He, and Qiu]{wang2026dimensional}
 Junxuan Wang, Xuyang Ge, Wentao Shu, Zhengfu He, and Xipeng Qiu.
-\newblock Dimensional collapse in transformer attention outputs: A challenge for sparse dictionary learning.
-\newblock In \emph{Forty-Third International Conference on Machine Learning, {ICML} 2026, Seoul, South Korea, July 6--11, 2026}, 2026.
+\newblock Dimensional collapse in transformer attention outputs: A challenge
+  for sparse dictionary learning.
+\newblock In \emph{Forty-Third International Conference on Machine Learning,
+  {ICML} 2026, Seoul, South Korea, July 6--11, 2026}, 2026.
 \newblock URL \url{https://icml.cc/virtual/2026/poster/64760}.
 
-\bibitem[Yang et~al.(2025)Yang, Li, Yang, Zhang, Hui, Zheng, Yu, Gao, Huang, Lv, et~al.]{yang2025qwen3}
-An~Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo~Zheng, Bowen Yu, Chang Gao, Chengen Huang, Chenxu Lv, et~al.
+\bibitem[Yang et~al.(2025)Yang, Li, Yang, Zhang, Hui, Zheng, Yu, Gao, Huang,
+  Lv, et~al.]{yang2025qwen3}
+An~Yang, Anfeng Li, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo~Zheng, Bowen
+  Yu, Chang Gao, Chengen Huang, Chenxu Lv, et~al.
 \newblock Qwen3 technical report.
 \newblock \emph{arXiv preprint arXiv:2505.09388}, 2025.
 

@@ -1,0 +1,39 @@
+---
+description: Training overview for Sparse Autoencoders
+globs: 
+alwaysApply: false
+---
+# SAE Training Process
+
+The training process for Sparse Autoencoders in this codebase focuses on reconstructing activations from language models while enforcing sparsity.
+
+## Training Pipeline
+
+1. **Activation Collection**: Extract activations from a pre-trained language model (e.g., Llama-3.1-8B)
+2. **Initialization**: Initialize SAE parameters, often with decoder normalization
+3. **Training**: Minimize reconstruction loss while enforcing sparsity
+4. **Post-processing**: Transform SAEs to have desired properties (e.g., unit decoder norm)
+
+The training process is implemented in [src/lm_saes/trainer.py](mdc:src/lm_saes/trainer.py).
+
+## Key Components
+
+- **Activation Buffer**: Stores model activations generated on-the-fly during training
+- **Mixed Parallelism**: Combines data parallelism for activation generation with tensor parallelism for SAE training
+- **K-Annealing**: Schedule that gradually reduces the number of active features during training
+
+## Loss Functions
+
+The loss function typically combines:
+1. **Reconstruction Loss**: MSE between original activations and reconstructed activations
+2. **Sparsity Loss**: L1 regularization or other mechanisms to promote sparsity
+
+## Training Configurations
+
+Training configurations can be specified through TOML files as shown in [examples/configuration/train.toml](mdc:examples/configuration/train.toml).
+
+## Resource Considerations
+
+- Training SAEs requires significant computational resources
+- The codebase includes optimizations for disk I/O and memory usage
+- Online activation generation eliminates the need for vast storage resources, making it more suitable for academic research

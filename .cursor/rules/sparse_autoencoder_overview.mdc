@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Sparse Autoencoder Overview
+
+Sparse Autoencoders (SAEs) are neural network models used to extract interpretable features from language models. They help address the superposition problem in neural networks by learning sparse, interpretable representations of activations.
+
+## Key Concepts
+
+- **Superposition**: When a neural network represents multiple features in a single neuron, making interpretation difficult.
+- **Monosemanticity**: The desirable property where each feature represents exactly one concept.
+- **Sparsity**: The property where only a small subset of features activate for a given input, improving interpretability.
+
+## Architecture
+
+A typical SAE consists of:
+- An **encoder** that maps model activations to a higher-dimensional latent space
+- A **decoder** that reconstructs the original activations from the latent space
+- A **sparsity mechanism** (often L1 regularization or TopK activation) that enforces sparse activations
+
+The main implementation can be found in [src/lm_saes/sae.py](mdc:src/lm_saes/sae.py) with the abstract class defined in [src/lm_saes/abstract_sae.py](mdc:src/lm_saes/abstract_sae.py).
+
+## Types of SAEs
+
+1. **Vanilla SAEs**: Use ReLU activation + L1 regularization
+2. **TopK SAEs**: Only retain the top K activations per sample, zeroing out the rest
+3. **JumpReLU SAEs**: A variant with thresholded activation functions
+
+## Use Cases
+
+- Mechanistic interpretability of language models
+- Discovering features and circuits in neural networks
+- Addressing model hallucination
+- Mitigating safety-relevant behaviors
+- Creating a more interpretable latent space

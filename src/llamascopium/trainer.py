@@ -80,7 +80,14 @@ class TrainerConfig(BaseConfig):
             mode="serialization",
         ),
     ] = Field(default=torch.bfloat16, exclude=True, validate_default=False)
-    sparsity_loss_type: Literal["power", "tanh", "tanh-quad", "jumprelu-l0-quad", None] = None
+    sparsity_loss_type: Literal[
+        "power",
+        "tanh",
+        "tanh-quad",
+        "jumprelu-l0-quad",
+        "jumprelu-l0-mean-quad",
+        None,
+    ] = None
     target_l0: float | None = None
     """Target average number of active latents for target-L0 sparsity losses."""
     tanh_stretch_coefficient: float = 4.0

@@ -545,13 +545,13 @@ the active subspace of the training attention outputs as describe in TopK Lorsa.
 Gemma Lorsas are trained with Adam. We use 5,000 warmup steps and linearly decay 
 the learning rate over the final 20\% of training to $1/32$ of its peak value. 
 To avoid the excessive number of dead features, we linearly warm up the $\ell_1$ 
-coefficient over the first 6\% of training, corresponding to 480M tokens for the 8B model, 
-and use an auxiliary loss to further improve dictionary utilization.
+coefficient, and use an auxiliary loss to further improve dictionary utilization.
 
-For JumpReLU, we use a separate learning rate for the learnable thresholds: $0.1$ for 
-settings with $L_0 \in [10, 20]$ and $0.3$ for settings with $L_0 \in [100, 200]$. 
-We additionally apply global gradient clipping at $1.0$ to stabilize threshold optimization 
-and set the $L_p$ coefficient to $0.003$.
+For the JumpReLU threshold, we use a separate learning rate for the learnable threshold parameters. 
+We find that unconstrained threshold optimization can cause both the JumpReLU thresholds and encoder 
+norms to grow excessively. To prevent this, we freeze the JumpReLU thresholds once the $L_0$ approaches the target $L_0$. 
+We additionally apply global gradient clipping at $1.0$ to stabilize 
+threshold optimization and set the $L_p$ coefficient to $0.003$.
 
 The token batch sizes are 16,384, 32,768, and 131,072 for Gemma 3 270M, 1B,
 and 4B, respectively. Learning rates and other hyperparameters are summarized in
@@ -1134,6 +1134,46 @@ these dictionaries for circuit analysis.
 \end{table*}
 
 % TODO: Add separate tables for SAEs, transcoders, and Lorsas.
+
+
+\subsection{Gemma 3 JumpReLU Lorsa Hyperparameters}
+\label{app:lorsa-hyperparameters}
+
+\begin{table*}[t]
+    \centering
+    \caption{
+        Training hyperparameters for Gemma 3 JumpReLU Lorsa modules.
+        Each model family uses separate small- and big-$L_0$ runs. Dashes are
+        placeholders for the final released hyperparameters.
+    }
+    \label{tab:gemma_lorsa_hyperparameters}
+
+    \footnotesize
+    \renewcommand{\arraystretch}{1.05}
+    \setlength{\tabcolsep}{5pt}
+
+    \begin{adjustbox}{max width=\textwidth}
+    \begin{tabular}{llrrrrrrrrrr}
+        \toprule
+        Model & Run & Width & Target $L_0$ & Learning rate & Token batch size
+        & $\lambda$ & $\lambda_{\mathrm{aux}}$ & $\lambda_{\mathrm{aux}}$ warmup
+        & Threshold LR factor & Threshold-freeze $L_0$ & Training tokens \\
+        \midrule
+        \multirow{2}{*}{Gemma 3 270M}
+        & Small & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        & Big   & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        \midrule
+        \multirow{2}{*}{Gemma 3 1B}
+        & Small & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        & Big   & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        \midrule
+        \multirow{2}{*}{Gemma 3 4B}
+        & Small & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        & Big   & -- & -- & -- & -- & -- & -- & -- & -- & -- & -- \\
+        \bottomrule
+    \end{tabular}
+    \end{adjustbox}
+\end{table*}
 
 \section{Additional Evaluation Results}
 \label{app:additional-results}

@@ -1,0 +1,9 @@
+You are an expert in developing deep learning models in PyTorch.
+
+Key principles:
+
+- Add precise type hints and docstrings to all functions and classes. Type hints should follow PEP 585, where standard collections can be parameterized. In other words, use `list[int]` instead of `List[int]`.
+- When writing tests, use `pytest` and `pytest-mock` to write tests. Use `mocker` for mocking.
+- Current project use `uv` for dependency management. When generating instructions, assume that the user is using `uv` to install the dependencies, e.g. `uv add pydantic` to install `pydantic`, `uv add --dev pytest` to install `pytest` in dev mode.
+- When writing docstrings of `dataclass` or pydantic models, write field descriptions right after the field.
+- Do not automatically run the code, since the code is designed to be run on remote GPU servers.

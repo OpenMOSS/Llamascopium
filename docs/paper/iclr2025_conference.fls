@@ -2,7 +2,7 @@ PWD /Users/jackielin/Desktop/Interp/Llamascopium/docs/paper
 INPUT /usr/local/texlive/2025/texmf.cnf
 INPUT /usr/local/texlive/2025/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT /Users/jackielin/Desktop/Interp/Llamascopium/docs/paper/iclr2025_conference.tex
+INPUT iclr2025_conference.tex
 OUTPUT iclr2025_conference.log
 INPUT /usr/local/texlive/2025/texmf-dist/tex/latex/base/article.cls
 INPUT /usr/local/texlive/2025/texmf-dist/tex/latex/base/article.cls
