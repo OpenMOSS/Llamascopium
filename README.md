@@ -1,5 +1,7 @@
 # Llamascopium
 
+**Start here:** [Install](#installation) · [Documentation](https://openmoss.ai/Llamascopium/) · [Run an experiment](#launch-an-experiment) · [Visualize features](#visualizing-the-learned-dictionary) · [Examples](examples/)
+
 > [!NOTE]
 > This package was previously published as **`lm-saes`** (project name: **Language-Model-SAEs**) and now it has been renamed to `llamascopium`.
 
@@ -13,6 +15,9 @@
 
 - 2025.8.23 We identify a prevalent low-rank structure in attention outputs as the key cause of dead features, and propose **Active Subspace Initialization** to improve sparse dictionary learning on these low-rank activations. Link: [Dimensional Collapse in Transformer Attention Outputs: A Challenge for Sparse Dictionary Learning](https://arxiv.org/abs/2508.16929) (ICML 2026).
 
+<details>
+<summary>Earlier updates</summary>
+
 - 2025.4.29 We introduce **Low-Rank Sparse Attention (Lorsa)** to attack attention superposition, extracting tens of thousands of true attention units from LLM attention layers. Link: [Towards Understanding the Nature of Attention with Low-Rank Sparse Decomposition](https://arxiv.org/abs/2504.20938) (ICLR 2026).
 
 - 2024.10.29 We introduce **Llama Scope**, our first contribution to the open-source Sparse Autoencoder ecosystem. Stay tuned! Link: [Llama Scope: Extracting Millions of Features from Llama-3.1-8B with Sparse Autoencoders](http://arxiv.org/abs/2410.20526).
@@ -22,6 +27,8 @@
 - 2024.5.22 We propose hierarchical tracing, a promising method to **scale up sparse feature circuit analysis** to industrial sized language models! Link: [Automatically Identifying Local and Global Circuits with Linear Computation Graphs](https://arxiv.org/pdf/2405.13868) (ICML 2024 MI Workshop).
 
 - 2024.2.19 Our first attempt on SAE-based circuit analysis for Othello-GPT leads us to **an example of Attention Superposition in the wild**! Link: [Dictionary learning improves patch-free circuit discovery in mechanistic interpretability: A case study on othello-gpt](https://arxiv.org/pdf/2402.12201).
+
+</details>
 
 ## Features
 
