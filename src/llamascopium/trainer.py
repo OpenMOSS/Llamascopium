@@ -1,6 +1,6 @@
+import gc
 import json
 import math
-import gc
 import os
 from pathlib import Path
 from typing import Annotated, Any, Callable, Iterable, Literal, Tuple
@@ -17,7 +17,8 @@ from pydantic import (
     WithJsonSchema,
 )
 from torch import Tensor
-from torch.distributed.checkpoint import FileSystemReader, FileSystemWriter
+from torch.distributed.checkpoint import BytesStorageMetadata, FileSystemReader, FileSystemWriter
+from torch.distributed.checkpoint.state_dict_loader import _load_state_dict_from_keys
 from torch.optim import Adam, Optimizer
 from tqdm import tqdm
 from wandb.sdk.wandb_run import Run
@@ -34,8 +35,8 @@ from llamascopium.metrics import (
     Metric,
     ModelSpecificMetric,
 )
-from llamascopium.models.sparse_dictionary import SparseDictionary
 from llamascopium.models.protocols import NormConstrainable
+from llamascopium.models.sparse_dictionary import SparseDictionary
 from llamascopium.optim import SparseAdam, clip_grad_norm, get_scheduler
 from llamascopium.utils.distributed import is_primary_rank
 from llamascopium.utils.distributed.ops import item
@@ -275,6 +276,84 @@ class Trainer:
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
 
+    @staticmethod
+    def _initialize_optimizer_state_for_checkpoint_load(optimizer: Optimizer) -> None:
+        """Materialize lazy optimizer state so DCP has a complete load template."""
+        if optimizer.state:
+            return
+
+        if isinstance(optimizer, SparseAdam):
+            for group in optimizer.param_groups:
+                for parameter in group["params"]:
+                    if not parameter.requires_grad:
+                        continue
+                    state = optimizer.state[parameter]
+                    state["step"] = 0
+                    state["exp_avg"] = torch.zeros_like(parameter, memory_format=torch.preserve_format)
+                    state["exp_avg_sq"] = torch.zeros_like(parameter, memory_format=torch.preserve_format)
+        elif isinstance(optimizer, Adam):
+            original_lrs = [group["lr"] for group in optimizer.param_groups]
+            initialized_parameters: list[Tensor] = []
+            try:
+                for group in optimizer.param_groups:
+                    group["lr"] = 0.0
+                    for parameter in group["params"]:
+                        if not parameter.requires_grad:
+                            continue
+                        if parameter.grad is not None:
+                            raise RuntimeError("Expected a fresh optimizer without parameter gradients")
+                        parameter.grad = torch.zeros_like(parameter, memory_format=torch.preserve_format)
+                        initialized_parameters.append(parameter)
+                optimizer.step()
+            finally:
+                for group, lr in zip(optimizer.param_groups, original_lrs, strict=True):
+                    group["lr"] = lr
+                for parameter in initialized_parameters:
+                    parameter.grad = None
+        else:
+            raise TypeError(f"Unsupported optimizer type for checkpoint loading: {type(optimizer).__name__}")
+
+        if not optimizer.state:
+            raise RuntimeError("Failed to initialize optimizer state for distributed checkpoint loading")
+
+    @staticmethod
+    def _merge_checkpoint_values(target: Any, loaded: Any) -> None:
+        if isinstance(target, dict) and isinstance(loaded, dict):
+            for key, value in loaded.items():
+                target_key = key
+                if isinstance(key, str) and key.isdigit() and int(key) in target:
+                    target.pop(key, None)
+                    target_key = int(key)
+                if target_key in target and isinstance(target[target_key], (dict, list)):
+                    Trainer._merge_checkpoint_values(target[target_key], value)
+                else:
+                    target[target_key] = value
+            return
+        if isinstance(target, list) and isinstance(loaded, list):
+            for index, value in enumerate(loaded):
+                if index < len(target) and isinstance(target[index], (dict, list)):
+                    Trainer._merge_checkpoint_values(target[index], value)
+                elif index < len(target):
+                    target[index] = value
+                else:
+                    target.append(value)
+            return
+        raise TypeError(f"Cannot merge checkpoint value {type(loaded).__name__} into {type(target).__name__}")
+
+    @staticmethod
+    def _load_distributed_state_dict(state_dict: dict[str, Any], fs_reader: FileSystemReader) -> None:
+        dcp.load(state_dict, storage_reader=fs_reader)
+
+        # DCP loads tensors in place, but immutable Python values such as the
+        # SparseAdam step and scheduler counters require explicit replacement.
+        metadata = fs_reader.read_metadata()
+        byte_keys = {
+            key for key, value in metadata.state_dict_metadata.items() if isinstance(value, BytesStorageMetadata)
+        }
+        if byte_keys:
+            loaded_values = _load_state_dict_from_keys(keys=byte_keys, storage_reader=fs_reader)
+            Trainer._merge_checkpoint_values(state_dict, loaded_values)
+
     @classmethod
     def from_checkpoint(
         cls,
@@ -374,11 +453,11 @@ class Trainer:
         else:
             optimizer_path = checkpoint_dir / "optimizer.dcp"
             fs_reader = FileSystemReader(str(optimizer_path))
+            trainer._initialize_optimizer_state_for_checkpoint_load(trainer.optimizer)
             optimizer_state = trainer.optimizer.state_dict()
-            dcp.load(optimizer_state, storage_reader=fs_reader)
+            trainer._load_distributed_state_dict(optimizer_state, fs_reader)
             trainer.optimizer.load_state_dict(optimizer_state)
-            logger.info("Loaded optimizer state")
-            logger.info(f"trainer.optimizer.state_dict(): {trainer.optimizer.state_dict()}")
+            logger.info(f"Loaded optimizer state for {len(trainer.optimizer.state)} parameters")
 
         # Load scheduler state
         if sae.device_mesh is None:
@@ -390,7 +469,7 @@ class Trainer:
             scheduler_path = checkpoint_dir / "scheduler.dcp"
             fs_reader = FileSystemReader(str(scheduler_path))
             scheduler_state = trainer.scheduler.state_dict()
-            dcp.load(scheduler_state, storage_reader=fs_reader)
+            trainer._load_distributed_state_dict(scheduler_state, fs_reader)
             trainer.scheduler.load_state_dict(scheduler_state)
             logger.info("Loaded scheduler state")
             logger.info(f"trainer.scheduler.state_dict(): {trainer.scheduler.state_dict()}")
