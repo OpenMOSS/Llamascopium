@@ -9,6 +9,16 @@ from llamascopium.circuits.attribution import (
     prune_attribution,
     qk_trace,
 )
+from llamascopium.circuits.global_weights import (
+    GlobalConnection,
+    GlobalWeights,
+    InhibitoryAtlas,
+    InhibitoryConnection,
+    InhibitoryStatistics,
+    InhibitoryWeights,
+    compute_global_weights,
+    compute_inhibitory_weights,
+)
 from llamascopium.circuits.hooks import (
     apply_saes,
     detach_at,
@@ -44,4 +54,12 @@ __all__ = [
     "replace_model_biases_with_leaves",
     "replace_sae_biases_with_leaves",
     "compute_hessian_matrix",
+    "GlobalConnection",
+    "GlobalWeights",
+    "compute_global_weights",
+    "InhibitoryAtlas",
+    "InhibitoryConnection",
+    "InhibitoryStatistics",
+    "InhibitoryWeights",
+    "compute_inhibitory_weights",
 ]

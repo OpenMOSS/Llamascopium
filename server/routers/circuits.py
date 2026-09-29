@@ -2,12 +2,14 @@ import functools
 import re
 import threading
 import traceback
+import uuid
+from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Optional, cast
 
 import torch
 from fastapi import APIRouter, BackgroundTasks, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from torch.distributed.device_mesh import DeviceMesh
 
 from llamascopium import (
@@ -25,6 +27,9 @@ from llamascopium import (
     TransformerLensLanguageModel,
     prune_attribution,
 )
+from llamascopium.circuits.global_weights import compute_inhibitory_weights
+from llamascopium.models.lorsa import LowRankSparseAttention
+from llamascopium.models.sae import SparseAutoEncoder
 from llamascopium.utils.distributed import is_primary_rank
 from llamascopium.utils.logging import get_distributed_logger
 from llamascopium.utils.timer import timer
@@ -40,6 +45,103 @@ router = APIRouter(tags=["circuits"])
 
 # Lock for thread-safe circuit generation
 _generation_lock = threading.Lock()
+_inhibitory_jobs: dict[str, dict[str, Any]] = {}
+_inhibitory_jobs_lock = threading.Lock()
+
+
+class InhibitoryRequest(BaseModel):
+    sae_name: str
+    feature_index: int = Field(ge=0)
+    prompts: list[str] = Field(min_length=1, max_length=32)
+    top_k: int = Field(default=10, ge=1, le=50)
+    normalized: bool = False
+
+
+@distributed
+def _compute_inhibitory_job(
+    sae_set_name: str,
+    request: InhibitoryRequest,
+    device_mesh: DeviceMesh | None = None,
+):
+    if device_mesh is not None:
+        raise ValueError("Inhibitory tracing currently requires a non-distributed worker")
+    sae_set = client.get_sae_set(name=sae_set_name)
+    if sae_set is None or sae_set.sae_series != sae_series:
+        raise ValueError(f"SAE set {sae_set_name} not found")
+    if request.sae_name not in sae_set.sae_names:
+        raise ValueError(f"SAE {request.sae_name} is not in set {sae_set_name}")
+    with _generation_lock:
+        saes = [get_sae(name=name, device_mesh=None) for name in sae_set.sae_names]
+        if not all(isinstance(sae, SparseAutoEncoder | LowRankSparseAttention) for sae in saes):
+            raise ValueError("Inhibitory tracing requires SAE/transcoder and Lorsa dictionaries")
+        selected = next(sae for name, sae in zip(sae_set.sae_names, saes) if name == request.sae_name)
+        if request.feature_index >= selected.cfg.d_sae:
+            raise ValueError(f"Feature {request.feature_index} is outside {request.sae_name}")
+        model_name = client.get_sae_model_name(sae_set.sae_names[0], sae_set.sae_series)
+        model = get_model(name=model_name, device_mesh=None)
+        if not isinstance(model, TransformerLensLanguageModel):
+            raise ValueError("Inhibitory tracing requires a TransformerLens model")
+        target = (selected.cfg.hook_point_out, request.feature_index)
+        result = compute_inhibitory_weights(model, saes, request.prompts, [target])
+        names_by_hook = {sae.cfg.hook_point_out: name for name, sae in zip(sae_set.sae_names, saes)}
+        return {
+            "target": {"sae_name": request.sae_name, "feature_index": request.feature_index},
+            "num_samples": result.num_samples,
+            "num_positions": result.n_total,
+            "edges": [
+                {**asdict(edge), "source_sae_name": names_by_hook[edge.source]}
+                for edge in result.topk(target, k=request.top_k, normalized=request.normalized)
+            ],
+        }
+
+
+async def _run_inhibitory_job(job_id: str, circuit_id: str, sae_set_name: str, request: InhibitoryRequest):
+    with _inhibitory_jobs_lock:
+        _inhibitory_jobs[job_id] = {"status": "running", "circuit_id": circuit_id}
+    try:
+        result = await _compute_inhibitory_job(sae_set_name, request)
+        with _inhibitory_jobs_lock:
+            _inhibitory_jobs[job_id] = {"status": "completed", "circuit_id": circuit_id, "result": result}
+    except Exception as exc:
+        logger.exception("Inhibitory tracing job %s failed", job_id)
+        with _inhibitory_jobs_lock:
+            _inhibitory_jobs[job_id] = {"status": "failed", "circuit_id": circuit_id, "error": str(exc)}
+
+
+@router.post("/circuits/{circuit_id}/inhibitory")
+def start_inhibitory_job(circuit_id: str, request: InhibitoryRequest, background_tasks: BackgroundTasks):
+    circuit = client.get_circuit(circuit_id)
+    if circuit is None or circuit.sae_series != sae_series:
+        return Response(content=f"Circuit {circuit_id} not found", status_code=404)
+    if circuit.status != CircuitStatus.COMPLETED:
+        return Response(content="Circuit is not ready", status_code=409)
+    if not all(prompt.strip() for prompt in request.prompts):
+        return Response(content="Prompts must be nonempty", status_code=400)
+    sae_set = client.get_sae_set(name=circuit.sae_set_name)
+    if sae_set is None or request.sae_name not in sae_set.sae_names:
+        return Response(content="Target SAE is not in the circuit's SAE set", status_code=400)
+    job_id = str(uuid.uuid4())
+    with _inhibitory_jobs_lock:
+        for old_id, job in list(_inhibitory_jobs.items()):
+            if len(_inhibitory_jobs) < 100:
+                break
+            if job["status"] in ("completed", "failed"):
+                del _inhibitory_jobs[old_id]
+        _inhibitory_jobs[job_id] = {"status": "pending", "circuit_id": circuit_id}
+    background_tasks.add_task(_run_inhibitory_job, job_id, circuit_id, circuit.sae_set_name, request)
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/circuits/{circuit_id}/inhibitory/{job_id}")
+def get_inhibitory_job(circuit_id: str, job_id: str):
+    circuit = client.get_circuit(circuit_id)
+    if circuit is None or circuit.sae_series != sae_series:
+        return Response(content=f"Circuit {circuit_id} not found", status_code=404)
+    with _inhibitory_jobs_lock:
+        job = _inhibitory_jobs.get(job_id)
+        if job is None or job["circuit_id"] != circuit_id:
+            return Response(content=f"Inhibitory job {job_id} not found", status_code=404)
+        return {key: value for key, value in job.items() if key != "circuit_id"}
 
 
 class PreviewRequest(BaseModel):

@@ -26,6 +26,7 @@ import { SelectedFeaturesList } from '@/components/circuits/selected-features-li
 import { NodeConnections } from '@/components/circuits/node-connections'
 import { ThresholdControls } from '@/components/circuits/threshold-controls'
 import { MatryoshkaSubgraphControl } from '@/components/circuits/matryoshka-subgraph-control'
+import { InhibitoryDialog } from '@/components/circuits/inhibitory-dialog'
 import { FeatureCardHorizontal } from '@/components/feature/feature-card-horizontal'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -307,6 +308,18 @@ function CircuitPage() {
     return node.feature
   }, [clickedId, circuit])
 
+  const inhibitoryTarget = useMemo(() => {
+    const node = circuit?.nodes.find(
+      (candidate) => candidate.nodeId === clickedId,
+    )
+    return node &&
+      (node.featureType === 'lorsa' ||
+        node.featureType === 'cross layer transcoder' ||
+        node.featureType === 'matryoshka sae')
+      ? node
+      : null
+  }, [circuit, clickedId])
+
   const handleNodeClick = useCallback(
     (nodeId: string, isMultiSelect: boolean) => {
       if (isMultiSelect) {
@@ -362,8 +375,8 @@ function CircuitPage() {
 
   return (
     <div className="h-full flex flex-col overflow-hidden bg-slate-50/50">
-      <div className="pt-4 pb-6 px-20 flex items-center">
-        <div className="flex-1">
+      <div className="pt-4 pb-6 px-4 xl:px-20 flex flex-wrap items-center justify-center gap-3">
+        <div className="order-2 w-full xl:order-1 xl:w-auto xl:flex-1">
           {statusData?.status === 'completed' && (
             <ThresholdControls
               nodeThreshold={nodeThreshold}
@@ -373,15 +386,15 @@ function CircuitPage() {
             />
           )}
         </div>
-        <div className="flex justify-center items-center gap-3">
-          <div className="w-[500px]">
+        <div className="order-1 flex w-full flex-wrap justify-center items-center gap-3 xl:order-2 xl:w-auto">
+          <div className="w-full max-w-[500px]">
             <GraphSelector
               circuits={circuits}
               selectedCircuitId={circuitId}
               onSelect={handleCircuitSelect}
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap justify-center gap-2">
             <NewGraphDialog
               saeSets={saeSets}
               onGraphCreated={handleGraphCreated}
@@ -414,9 +427,18 @@ function CircuitPage() {
                 }
               />
             )}
+            {circuitData && inhibitoryTarget && (
+              <InhibitoryDialog
+                key={`${circuitId}-${inhibitoryTarget.nodeId}`}
+                circuitId={circuitId}
+                saeName={inhibitoryTarget.saeName}
+                featureIndex={inhibitoryTarget.feature.featureIndex}
+                prompt={circuitData.prompt}
+              />
+            )}
           </div>
         </div>
-        <div className="flex-1" />
+        <div className="hidden xl:block xl:flex-1" />
       </div>
 
       {isLoadingStatus ? (

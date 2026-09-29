@@ -121,6 +121,77 @@ export interface FetchCircuitResponse {
   edgeThreshold: number
 }
 
+export interface InhibitoryEdge {
+  source: string
+  sourceSaeName: string
+  sourceFeature: number
+  target: string
+  targetFeature: number
+  kind: 'inhibitory'
+  score: number
+  normalizedInhibitoryScore: number
+  delta: number
+  virtualWeight: number
+  muOn: number
+  muOff: number
+}
+
+export interface InhibitoryResult {
+  target: { saeName: string; featureIndex: number }
+  numSamples: number
+  numPositions: number
+  edges: InhibitoryEdge[]
+}
+
+export interface InhibitoryJob {
+  status: CircuitStatus
+  result?: InhibitoryResult
+  error?: string
+}
+
+export const startInhibitoryJob = createServerFn({ method: 'POST' })
+  .inputValidator(
+    (data: {
+      circuitId: string
+      saeName: string
+      featureIndex: number
+      prompts: string[]
+      topK: number
+      normalized: boolean
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/circuits/${encodeURIComponent(data.circuitId)}/inhibitory`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sae_name: data.saeName,
+          feature_index: data.featureIndex,
+          prompts: data.prompts,
+          top_k: data.topK,
+          normalized: data.normalized,
+        }),
+      },
+    )
+    if (!response.ok) throw new Error(await response.text())
+    return camelcaseKeys(await response.json(), { deep: true }) as {
+      jobId: string
+      status: CircuitStatus
+    }
+  })
+
+export const fetchInhibitoryJob = createServerFn({ method: 'GET' })
+  .inputValidator((data: { circuitId: string; jobId: string }) => data)
+  .handler(async ({ data }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/circuits/${encodeURIComponent(data.circuitId)}/inhibitory/${encodeURIComponent(data.jobId)}`,
+    )
+    if (!response.ok) throw new Error(await response.text())
+    return camelcaseKeys(await response.json(), { deep: true }) as InhibitoryJob
+  })
+
 export const fetchSaeSets = createServerFn({ method: 'GET' }).handler(
   async () => {
     const response = await fetch(`${process.env.BACKEND_URL}/sae-sets`)
