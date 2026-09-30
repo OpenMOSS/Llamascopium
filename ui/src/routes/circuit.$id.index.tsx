@@ -26,7 +26,7 @@ import { SelectedFeaturesList } from '@/components/circuits/selected-features-li
 import { NodeConnections } from '@/components/circuits/node-connections'
 import { ThresholdControls } from '@/components/circuits/threshold-controls'
 import { MatryoshkaSubgraphControl } from '@/components/circuits/matryoshka-subgraph-control'
-import { InhibitoryDialog } from '@/components/circuits/inhibitory-dialog'
+import { GlobalWeightsDialog } from '@/components/circuits/global-weights-dialog'
 import { FeatureCardHorizontal } from '@/components/feature/feature-card-horizontal'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -308,7 +308,7 @@ function CircuitPage() {
     return node.feature
   }, [clickedId, circuit])
 
-  const inhibitoryTarget = useMemo(() => {
+  const weightTarget = useMemo(() => {
     const node = circuit?.nodes.find(
       (candidate) => candidate.nodeId === clickedId,
     )
@@ -427,12 +427,12 @@ function CircuitPage() {
                 }
               />
             )}
-            {circuitData && inhibitoryTarget && (
-              <InhibitoryDialog
-                key={`${circuitId}-${inhibitoryTarget.nodeId}`}
+            {circuitData && weightTarget && (
+              <GlobalWeightsDialog
+                key={`${circuitId}-${weightTarget.nodeId}`}
                 circuitId={circuitId}
-                saeName={inhibitoryTarget.saeName}
-                featureIndex={inhibitoryTarget.feature.featureIndex}
+                saeName={weightTarget.saeName}
+                featureIndex={weightTarget.feature.featureIndex}
                 prompt={circuitData.prompt}
               />
             )}

@@ -192,7 +192,7 @@ class InhibitoryWeights:
 
 
 @torch.no_grad()
-def compute_inhibitory_weights(
+def compute_inhibitory_global_weights(
     model: TransformerLensLanguageModel,
     dictionaries: list[SparseAutoEncoder | LowRankSparseAttention],
     inputs: Iterable[str | torch.Tensor],
@@ -257,3 +257,6 @@ def compute_inhibitory_weights(
             model(prompt)
         result.update(source_activations, target_pre, scales, patterns)
     return result
+
+
+compute_inhibitory_weights = compute_inhibitory_global_weights

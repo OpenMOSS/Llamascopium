@@ -3,6 +3,7 @@ from llamascopium.circuits.global_weights.inhibitory import (
     InhibitoryConnection,
     InhibitoryStatistics,
     InhibitoryWeights,
+    compute_inhibitory_global_weights,
     compute_inhibitory_weights,
 )
 from llamascopium.circuits.global_weights.weights import (
@@ -21,5 +22,6 @@ __all__ = [
     "InhibitoryConnection",
     "InhibitoryStatistics",
     "InhibitoryWeights",
+    "compute_inhibitory_global_weights",
     "compute_inhibitory_weights",
 ]

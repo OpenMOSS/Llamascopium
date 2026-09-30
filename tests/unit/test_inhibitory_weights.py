@@ -8,6 +8,7 @@ from llamascopium.circuits.global_weights import (
     InhibitoryAtlas,
     InhibitoryConnection,
     InhibitoryWeights,
+    compute_inhibitory_global_weights,
     compute_inhibitory_weights,
 )
 from llamascopium.models.lorsa import LorsaConfig, LowRankSparseAttention
@@ -140,6 +141,7 @@ def test_inhibitory_atlas_uses_positive_priority_and_causal_edge_direction():
 
 
 def test_real_model_captures_selected_pre_topk_target_and_sparse_source():
+    assert compute_inhibitory_weights is compute_inhibitory_global_weights
     torch.manual_seed(0)
     cfg = HookedTransformerConfig(
         n_layers=2,

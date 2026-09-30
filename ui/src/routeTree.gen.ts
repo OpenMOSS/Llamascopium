@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as GlobalWeightsRouteImport } from './routes/global-weights'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DictionariesIndexRouteImport } from './routes/dictionaries.index'
 import { Route as CircuitsIndexRouteImport } from './routes/circuits.index'
@@ -21,6 +22,11 @@ import { Route as DictionariesDictionaryNameFeaturesFeatureIndexRouteImport } fr
 import { Route as EmbedDictionariesDictionaryNameFeaturesFeatureIndexRouteImport } from './routes/embed.dictionaries.$dictionaryName.features.$featureIndex'
 import { Route as EmbedCircuitIdQkNodeIdRouteImport } from './routes/embed.circuit.$id.qk.$nodeId'
 
+const GlobalWeightsRoute = GlobalWeightsRouteImport.update({
+  id: '/global-weights',
+  path: '/global-weights',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -82,6 +88,7 @@ const EmbedCircuitIdQkNodeIdRoute = EmbedCircuitIdQkNodeIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/global-weights': typeof GlobalWeightsRoute
   '/admin': typeof AdminIndexRoute
   '/bookmarks': typeof BookmarksIndexRoute
   '/circuits': typeof CircuitsIndexRoute
@@ -95,6 +102,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/global-weights': typeof GlobalWeightsRoute
   '/admin': typeof AdminIndexRoute
   '/bookmarks': typeof BookmarksIndexRoute
   '/circuits': typeof CircuitsIndexRoute
@@ -109,6 +117,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/global-weights': typeof GlobalWeightsRoute
   '/admin/': typeof AdminIndexRoute
   '/bookmarks/': typeof BookmarksIndexRoute
   '/circuits/': typeof CircuitsIndexRoute
@@ -124,6 +133,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/global-weights'
     | '/admin'
     | '/bookmarks'
     | '/circuits'
@@ -137,6 +147,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/global-weights'
     | '/admin'
     | '/bookmarks'
     | '/circuits'
@@ -150,6 +161,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/global-weights'
     | '/admin/'
     | '/bookmarks/'
     | '/circuits/'
@@ -164,6 +176,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  GlobalWeightsRoute: typeof GlobalWeightsRoute
   AdminIndexRoute: typeof AdminIndexRoute
   BookmarksIndexRoute: typeof BookmarksIndexRoute
   CircuitsIndexRoute: typeof CircuitsIndexRoute
@@ -178,6 +191,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/global-weights': {
+      id: '/global-weights'
+      path: '/global-weights'
+      fullPath: '/global-weights'
+      preLoaderRoute: typeof GlobalWeightsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -260,6 +280,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  GlobalWeightsRoute: GlobalWeightsRoute,
   AdminIndexRoute: AdminIndexRoute,
   BookmarksIndexRoute: BookmarksIndexRoute,
   CircuitsIndexRoute: CircuitsIndexRoute,

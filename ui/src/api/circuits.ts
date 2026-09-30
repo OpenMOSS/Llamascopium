@@ -192,6 +192,85 @@ export const fetchInhibitoryJob = createServerFn({ method: 'GET' })
     return camelcaseKeys(await response.json(), { deep: true }) as InhibitoryJob
   })
 
+export interface GlobalWeightEdge {
+  source: string
+  sourceSaeName: string
+  sourceFeature: number
+  target: string
+  targetSaeName: string
+  targetFeature: number
+  kind: 'global' | 'inhibitory'
+  weight?: number
+  score?: number
+  normalizedInhibitoryScore?: number
+  delta?: number
+  virtualWeight?: number
+  muOn?: number
+  muOff?: number
+}
+
+export interface GlobalWeightResult {
+  mode: 'global' | 'inhibitory'
+  target: { saeName: string; featureIndex: number }
+  numSamples: number
+  numPositions: number | null
+  upstream: GlobalWeightEdge[]
+  downstream: GlobalWeightEdge[]
+}
+
+export interface GlobalWeightJob {
+  status: CircuitStatus
+  result?: GlobalWeightResult
+  error?: string
+}
+
+export const startGlobalWeightJob = createServerFn({ method: 'POST' })
+  .inputValidator(
+    (data: {
+      circuitId: string
+      saeName: string
+      featureIndex: number
+      prompts: string[]
+      topK: number
+      normalized: boolean
+      mode: 'global' | 'inhibitory'
+    }) => data,
+  )
+  .handler(async ({ data }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/circuits/${encodeURIComponent(data.circuitId)}/global-weights`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sae_name: data.saeName,
+          feature_index: data.featureIndex,
+          prompts: data.prompts,
+          top_k: data.topK,
+          normalized: data.normalized,
+          mode: data.mode,
+        }),
+      },
+    )
+    if (!response.ok) throw new Error(await response.text())
+    return camelcaseKeys(await response.json(), { deep: true }) as {
+      jobId: string
+      status: CircuitStatus
+    }
+  })
+
+export const fetchGlobalWeightJob = createServerFn({ method: 'GET' })
+  .inputValidator((data: { circuitId: string; jobId: string }) => data)
+  .handler(async ({ data }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/circuits/${encodeURIComponent(data.circuitId)}/global-weights/${encodeURIComponent(data.jobId)}`,
+    )
+    if (!response.ok) throw new Error(await response.text())
+    return camelcaseKeys(await response.json(), {
+      deep: true,
+    }) as GlobalWeightJob
+  })
+
 export const fetchSaeSets = createServerFn({ method: 'GET' }).handler(
   async () => {
     const response = await fetch(`${process.env.BACKEND_URL}/sae-sets`)
