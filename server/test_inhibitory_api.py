@@ -166,27 +166,3 @@ def test_global_weight_job_status_is_scoped_to_its_circuit(monkeypatch, circuits
     job_id = started["job_id"]
     assert circuits.get_global_weight_job("circuit-a", job_id) == {"status": "pending"}
     assert isinstance(circuits.get_global_weight_job("circuit-b", job_id), Response)
-
-
-def test_global_weight_interpretations_are_batched_by_sae(monkeypatch, circuits):
-    calls = []
-
-    def list_data(sae_name, indices, **kwargs):
-        calls.append((sae_name, indices))
-        return {
-            (sae_name, index): {"interpretation": {"text": f"feature {index}"}}
-            for index in indices
-        }
-
-    monkeypatch.setattr(circuits, "list_feature_data", list_data)
-    request = circuits.FeatureInterpretationsRequest(features=[
-        circuits.FeatureReference(sae_name="sae-a", feature_index=2),
-        circuits.FeatureReference(sae_name="sae-a", feature_index=1),
-        circuits.FeatureReference(sae_name="sae-a", feature_index=2),
-    ])
-    result = circuits.get_global_weight_interpretations(request)
-    assert calls == [("sae-a", [1, 2])]
-    assert result["interpretations"] == [
-        {"sae_name": "sae-a", "feature_index": 1, "text": "feature 1"},
-        {"sae_name": "sae-a", "feature_index": 2, "text": "feature 2"},
-    ]

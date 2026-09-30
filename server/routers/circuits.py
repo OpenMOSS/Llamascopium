@@ -63,38 +63,6 @@ class GlobalWeightRequest(InhibitoryRequest):
     mode: Literal["global", "inhibitory"] = "global"
 
 
-class FeatureReference(BaseModel):
-    sae_name: str
-    feature_index: int = Field(ge=0)
-
-
-class FeatureInterpretationsRequest(BaseModel):
-    features: list[FeatureReference] = Field(max_length=500)
-
-
-@router.post("/global-weights/interpretations")
-def get_global_weight_interpretations(request: FeatureInterpretationsRequest):
-    indices_by_sae: dict[str, set[int]] = {}
-    for feature in request.features:
-        indices_by_sae.setdefault(feature.sae_name, set()).add(feature.feature_index)
-    interpretations = []
-    for name, indices in indices_by_sae.items():
-        features = list_feature_data(
-            sae_name=name,
-            indices=sorted(indices),
-            with_samplings=False,
-            with_logits=False,
-        )
-        for (sae_name, feature_index), feature in features.items():
-            interpretation = feature.get("interpretation")
-            interpretations.append({
-                "sae_name": sae_name,
-                "feature_index": feature_index,
-                "text": interpretation.get("text") if interpretation else None,
-            })
-    return {"interpretations": interpretations}
-
-
 @distributed
 def _compute_inhibitory_job(
     sae_set_name: str,

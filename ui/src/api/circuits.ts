@@ -230,36 +230,6 @@ export interface GlobalWeightJob {
   error?: string
 }
 
-export const fetchGlobalWeightInterpretations = createServerFn({
-  method: 'POST',
-})
-  .inputValidator(
-    (data: { features: { saeName: string; featureIndex: number }[] }) => data,
-  )
-  .handler(async ({ data }) => {
-    const response = await fetch(
-      `${process.env.BACKEND_URL}/circuits/global-weights/interpretations`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          features: data.features.map((feature) => ({
-            sae_name: feature.saeName,
-            feature_index: feature.featureIndex,
-          })),
-        }),
-      },
-    )
-    if (!response.ok) throw new Error(await response.text())
-    return camelcaseKeys(await response.json(), { deep: true }) as {
-      interpretations: {
-        saeName: string
-        featureIndex: number
-        text: string | null
-      }[]
-    }
-  })
-
 export const startGlobalWeightJob = createServerFn({ method: 'POST' })
   .inputValidator(
     (data: {

@@ -1,13 +1,10 @@
 import { Link } from '@tanstack/react-router'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery } from '@tanstack/react-query'
 import { ArrowUpRight, GitCompareArrows, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import type { GlobalWeightEdge, GlobalWeightResult } from '@/api/circuits'
-import {
-  fetchGlobalWeightInterpretations,
-  fetchGlobalWeightJob,
-  startGlobalWeightJob,
-} from '@/api/circuits'
+import { fetchGlobalWeightJob, startGlobalWeightJob } from '@/api/circuits'
+import { featureQueryOptions } from '@/hooks/useFeatures'
 import { GlobalWeightsGraph } from '@/components/circuits/global-weights-graph'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -163,64 +160,59 @@ export function GlobalWeightsResults({
       ]),
     ).values(),
   )
-  const needsInterpretations =
-    result.target.interpretation === undefined ||
-    [...result.upstream, ...result.downstream].some(
-      (edge) =>
-        edge.sourceInterpretation === undefined ||
-        edge.targetInterpretation === undefined,
-    )
-  const { data: fetchedInterpretations, error: interpretationError } = useQuery(
-    {
-      queryKey: ['global-weight-interpretations', uniqueFeatures],
-      queryFn: () =>
-        fetchGlobalWeightInterpretations({
-          data: { features: uniqueFeatures },
-        }),
-      enabled: needsInterpretations,
-    },
-  )
+  const featureQueries = useQueries({
+    queries: uniqueFeatures.map((feature) => ({
+      ...featureQueryOptions({
+        dictionary: feature.saeName,
+        featureIndex: feature.featureIndex,
+      }),
+      staleTime: 5 * 60 * 1000,
+    })),
+  })
+  const interpretationsPending = featureQueries.some((query) => query.isPending)
+  const interpretationError = featureQueries.find((query) => query.error)?.error
   const interpretationByFeature = new Map(
-    fetchedInterpretations?.interpretations.map((item) => [
-      `${item.saeName}:${item.featureIndex}`,
-      item.text,
-    ]) ?? [],
+    featureQueries.flatMap((query) =>
+      query.data
+        ? [
+            [
+              `${query.data.dictionaryName}:${query.data.featureIndex}`,
+              query.data.interpretation?.text ?? null,
+            ] as const,
+          ]
+        : [],
+    ),
   )
   const withInterpretations: GlobalWeightResult = {
     ...result,
     target: {
       ...result.target,
       interpretation:
-        result.target.interpretation ??
         interpretationByFeature.get(
           `${result.target.saeName}:${result.target.featureIndex}`,
-        ),
+        ) ?? result.target.interpretation,
     },
     upstream: result.upstream.map((edge) => ({
       ...edge,
       sourceInterpretation:
-        edge.sourceInterpretation ??
         interpretationByFeature.get(
           `${edge.sourceSaeName}:${edge.sourceFeature}`,
-        ),
+        ) ?? edge.sourceInterpretation,
       targetInterpretation:
-        edge.targetInterpretation ??
         interpretationByFeature.get(
           `${edge.targetSaeName}:${edge.targetFeature}`,
-        ),
+        ) ?? edge.targetInterpretation,
     })),
     downstream: result.downstream.map((edge) => ({
       ...edge,
       sourceInterpretation:
-        edge.sourceInterpretation ??
         interpretationByFeature.get(
           `${edge.sourceSaeName}:${edge.sourceFeature}`,
-        ),
+        ) ?? edge.sourceInterpretation,
       targetInterpretation:
-        edge.targetInterpretation ??
         interpretationByFeature.get(
           `${edge.targetSaeName}:${edge.targetFeature}`,
-        ),
+        ) ?? edge.targetInterpretation,
     })),
   }
   const empty = result.upstream.length === 0 && result.downstream.length === 0
@@ -252,6 +244,13 @@ export function GlobalWeightsResults({
           <GlobalWeightsGraph
             result={withInterpretations}
             normalized={normalized}
+            missingInterpretationLabel={
+              interpretationsPending
+                ? 'Loading interpretation...'
+                : interpretationError
+                  ? 'Interpretation could not be loaded'
+                  : undefined
+            }
           />
           <EdgeTable
             edges={result.upstream}

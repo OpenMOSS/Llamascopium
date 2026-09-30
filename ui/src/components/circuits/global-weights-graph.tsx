@@ -1,5 +1,4 @@
 import { Link } from '@tanstack/react-router'
-import { ArrowUpRight } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { GlobalWeightEdge, GlobalWeightResult } from '@/api/circuits'
 
@@ -26,18 +25,29 @@ function edgeValue(edge: GlobalWeightEdge, normalized: boolean) {
 
 function edgeColor(edge: GlobalWeightEdge) {
   return edge.kind === 'inhibitory'
-    ? '#b45309'
+    ? '#e8a34d'
     : (edge.weight ?? 0) < 0
-      ? '#dc5454'
-      : '#4e92d9'
+      ? '#fb7185'
+      : '#60a5fa'
+}
+
+function lanes(edges: GlobalWeightEdge[], left: boolean) {
+  const groups: { edge: GlobalWeightEdge; index: number }[][] = [[], [], []]
+  edges.forEach((edge, index) => {
+    const lane = left ? 2 - (index % 3) : index % 3
+    groups[lane].push({ edge, index })
+  })
+  return groups
 }
 
 export function GlobalWeightsGraph({
   result,
   normalized,
+  missingInterpretationLabel = 'No interpretation available',
 }: {
   result: GlobalWeightResult
   normalized: boolean
+  missingInterpretationLabel?: string
 }) {
   const graphRef = useRef<HTMLDivElement>(null)
   const centerRef = useRef<HTMLSpanElement>(null)
@@ -95,12 +105,12 @@ export function GlobalWeightsGraph({
       ? edge.sourceInterpretation
       : edge.targetInterpretation
     const label = (
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-1 text-xs font-medium text-slate-800">
-          {shortName(hook, featureIndex)} <ArrowUpRight className="size-3" />
+      <span className="min-w-0 flex-1 text-left">
+        <span className="block font-mono text-[11px] font-semibold text-slate-100">
+          {shortName(hook, featureIndex)}
         </span>
-        <span className="block break-words text-xs leading-5 text-slate-600">
-          {interpretation || 'No interpretation available'}
+        <span className="block break-words text-[11px] leading-[1.35] text-slate-300">
+          {interpretation || missingInterpretationLabel}
         </span>
       </span>
     )
@@ -109,7 +119,7 @@ export function GlobalWeightsGraph({
         key={key}
         to="/dictionaries/$dictionaryName/features/$featureIndex"
         params={{ dictionaryName: saeName, featureIndex: String(featureIndex) }}
-        className="relative z-10 flex min-h-16 items-start gap-2 py-2 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-sky-600"
+        className="relative z-10 flex min-h-12 items-start gap-2 rounded-sm px-1 py-1 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-sky-300"
         title={`${saeName} #${featureIndex}`}
       >
         {left && label}
@@ -117,12 +127,26 @@ export function GlobalWeightsGraph({
           ref={(element) => {
             nodeRefs.current[key] = element
           }}
-          className={`mt-1.5 size-3 shrink-0 rounded-full border-2 border-white shadow-[0_0_0_1px_#94a3b8] ${hook.includes('attn') ? 'bg-sky-500' : 'bg-amber-500'}`}
+          className={`mt-0.5 size-3.5 shrink-0 rounded-full border border-slate-100/80 ${hook.includes('attn') ? 'bg-sky-500' : 'bg-orange-500'}`}
         />
         {!left && label}
       </Link>
     )
   }
+
+  const renderLane = (
+    items: { edge: GlobalWeightEdge; index: number }[],
+    left: boolean,
+    lane: number,
+  ) => (
+    <div
+      key={`${left ? 'up' : 'down'}-lane-${lane}`}
+      className="relative z-10 flex min-w-0 flex-col justify-center gap-6 py-12"
+      style={{ paddingTop: 48 + lane * 24, paddingBottom: 96 - lane * 24 }}
+    >
+      {items.map(({ edge, index }) => renderNode(edge, index, left))}
+    </div>
+  )
 
   const lines = [
     ...upstream.map((edge, index) => ({
@@ -136,24 +160,35 @@ export function GlobalWeightsGraph({
       left: false,
     })),
   ]
+  const centerHook = upstream[0]?.target ?? downstream[0]?.source ?? ''
 
   return (
-    <div className="border border-slate-200 bg-white">
-      <div className="flex flex-wrap gap-x-5 gap-y-1 border-b px-4 py-2 text-xs text-slate-600">
+    <div className="border border-slate-800 bg-[#151820]">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-white/10 px-4 py-2 text-xs text-slate-300">
+        <span>Upstream {upstream.length}</span>
+        <span>Downstream {downstream.length}</span>
         {result.mode === 'global' ? (
           <>
-            <span>Blue: positive weight</span>
-            <span>Red: negative weight</span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-full bg-sky-400" />
+              Positive
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-2 rounded-full bg-rose-400" />
+              Negative
+            </span>
           </>
         ) : (
-          <span>Amber: inhibitory score</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="size-2 rounded-full bg-amber-400" />
+            Inhibitory
+          </span>
         )}
-        <span>Line width: connection strength</span>
       </div>
       <div className="overflow-x-auto">
         <div
           ref={graphRef}
-          className="relative grid min-w-[980px] grid-cols-[minmax(250px,1fr)_280px_minmax(250px,1fr)] gap-3 px-5 py-5"
+          className="relative grid min-h-[560px] min-w-[1560px] grid-cols-[repeat(3,minmax(0,1fr))_180px_repeat(3,minmax(0,1fr))] gap-4 px-5"
         >
           {geometry && (
             <svg
@@ -167,37 +202,28 @@ export function GlobalWeightsGraph({
                 if (!point) return null
                 const source = left ? point : geometry.center
                 const target = left ? geometry.center : point
-                const middle = (source.x + target.x) / 2
+                const strength =
+                  Math.abs(edgeValue(edge, normalized)) / maxValue
                 return (
                   <path
                     key={key}
-                    d={`M ${source.x} ${source.y} C ${middle} ${source.y}, ${middle} ${target.y}, ${target.x} ${target.y}`}
+                    d={`M ${source.x} ${source.y} L ${target.x} ${target.y}`}
                     fill="none"
                     stroke={edgeColor(edge)}
-                    strokeWidth={
-                      1 + (3 * Math.abs(edgeValue(edge, normalized))) / maxValue
-                    }
-                    strokeOpacity="0.55"
+                    strokeWidth={0.75 + 2.75 * strength}
+                    strokeOpacity={0.25 + 0.6 * strength}
                   />
                 )
               })}
             </svg>
           )}
-          <div className="relative z-10 min-w-0">
-            <h3 className="mb-3 text-xs font-semibold uppercase text-slate-500">
-              Upstream · {upstream.length}
-            </h3>
-            <div className="divide-y divide-slate-100">
-              {upstream.map((edge, index) => renderNode(edge, index, true))}
-            </div>
-          </div>
-          <div className="relative z-10 flex min-h-32 flex-col items-center justify-center text-center">
-            <span className="mb-2 text-xs font-semibold uppercase text-slate-500">
-              Selected feature
-            </span>
+          {lanes(upstream, true).map((items, lane) =>
+            renderLane(items, true, lane),
+          )}
+          <div className="relative z-10 flex min-w-0 flex-col items-center justify-center text-center">
             <span
               ref={centerRef}
-              className="size-6 rounded-full border-[3px] border-slate-800 bg-sky-500"
+              className="size-6 rounded-full border-[3px] border-slate-100 bg-sky-500 shadow-[0_0_0_3px_#60a5fa55]"
             />
             <Link
               to="/dictionaries/$dictionaryName/features/$featureIndex"
@@ -205,22 +231,18 @@ export function GlobalWeightsGraph({
                 dictionaryName: result.target.saeName,
                 featureIndex: String(result.target.featureIndex),
               }}
-              className="mt-2 text-sm font-semibold text-sky-800 hover:underline"
+              className="mt-2 max-w-full break-all font-mono text-xs font-semibold text-white hover:underline"
+              title={`${result.target.saeName} #${result.target.featureIndex}`}
             >
-              {result.target.saeName} #{result.target.featureIndex}
+              {shortName(centerHook, result.target.featureIndex)}
             </Link>
-            <span className="mt-1 max-w-full break-words text-xs leading-5 text-slate-600">
-              {result.target.interpretation || 'No interpretation available'}
+            <span className="mt-1 max-w-full break-words text-xs leading-4 text-slate-200">
+              {result.target.interpretation || missingInterpretationLabel}
             </span>
           </div>
-          <div className="relative z-10 min-w-0">
-            <h3 className="mb-3 text-xs font-semibold uppercase text-slate-500">
-              Downstream · {downstream.length}
-            </h3>
-            <div className="divide-y divide-slate-100">
-              {downstream.map((edge, index) => renderNode(edge, index, false))}
-            </div>
-          </div>
+          {lanes(downstream, false).map((items, lane) =>
+            renderLane(items, false, lane),
+          )}
         </div>
       </div>
     </div>
