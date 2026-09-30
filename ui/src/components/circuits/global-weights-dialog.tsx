@@ -3,7 +3,11 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowUpRight, GitCompareArrows, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import type { GlobalWeightEdge, GlobalWeightResult } from '@/api/circuits'
-import { fetchGlobalWeightJob, startGlobalWeightJob } from '@/api/circuits'
+import {
+  fetchGlobalWeightInterpretations,
+  fetchGlobalWeightJob,
+  startGlobalWeightJob,
+} from '@/api/circuits'
 import { GlobalWeightsGraph } from '@/components/circuits/global-weights-graph'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -140,6 +144,85 @@ export function GlobalWeightsResults({
   result: GlobalWeightResult
   normalized: boolean
 }) {
+  const features = [
+    result.target,
+    ...result.upstream.flatMap((edge) => [
+      { saeName: edge.sourceSaeName, featureIndex: edge.sourceFeature },
+      { saeName: edge.targetSaeName, featureIndex: edge.targetFeature },
+    ]),
+    ...result.downstream.flatMap((edge) => [
+      { saeName: edge.sourceSaeName, featureIndex: edge.sourceFeature },
+      { saeName: edge.targetSaeName, featureIndex: edge.targetFeature },
+    ]),
+  ]
+  const uniqueFeatures = Array.from(
+    new Map(
+      features.map((feature) => [
+        `${feature.saeName}:${feature.featureIndex}`,
+        feature,
+      ]),
+    ).values(),
+  )
+  const needsInterpretations =
+    result.target.interpretation === undefined ||
+    [...result.upstream, ...result.downstream].some(
+      (edge) =>
+        edge.sourceInterpretation === undefined ||
+        edge.targetInterpretation === undefined,
+    )
+  const { data: fetchedInterpretations, error: interpretationError } = useQuery(
+    {
+      queryKey: ['global-weight-interpretations', uniqueFeatures],
+      queryFn: () =>
+        fetchGlobalWeightInterpretations({
+          data: { features: uniqueFeatures },
+        }),
+      enabled: needsInterpretations,
+    },
+  )
+  const interpretationByFeature = new Map(
+    fetchedInterpretations?.interpretations.map((item) => [
+      `${item.saeName}:${item.featureIndex}`,
+      item.text,
+    ]) ?? [],
+  )
+  const withInterpretations: GlobalWeightResult = {
+    ...result,
+    target: {
+      ...result.target,
+      interpretation:
+        result.target.interpretation ??
+        interpretationByFeature.get(
+          `${result.target.saeName}:${result.target.featureIndex}`,
+        ),
+    },
+    upstream: result.upstream.map((edge) => ({
+      ...edge,
+      sourceInterpretation:
+        edge.sourceInterpretation ??
+        interpretationByFeature.get(
+          `${edge.sourceSaeName}:${edge.sourceFeature}`,
+        ),
+      targetInterpretation:
+        edge.targetInterpretation ??
+        interpretationByFeature.get(
+          `${edge.targetSaeName}:${edge.targetFeature}`,
+        ),
+    })),
+    downstream: result.downstream.map((edge) => ({
+      ...edge,
+      sourceInterpretation:
+        edge.sourceInterpretation ??
+        interpretationByFeature.get(
+          `${edge.sourceSaeName}:${edge.sourceFeature}`,
+        ),
+      targetInterpretation:
+        edge.targetInterpretation ??
+        interpretationByFeature.get(
+          `${edge.targetSaeName}:${edge.targetFeature}`,
+        ),
+    })),
+  }
   const empty = result.upstream.length === 0 && result.downstream.length === 0
   return (
     <div className="min-w-0 border-t pt-4 space-y-4">
@@ -161,7 +244,15 @@ export function GlobalWeightsResults({
         </p>
       ) : (
         <>
-          <GlobalWeightsGraph result={result} normalized={normalized} />
+          {interpretationError && (
+            <p className="text-xs text-red-600">
+              Could not load feature interpretations.
+            </p>
+          )}
+          <GlobalWeightsGraph
+            result={withInterpretations}
+            normalized={normalized}
+          />
           <EdgeTable
             edges={result.upstream}
             direction="upstream"

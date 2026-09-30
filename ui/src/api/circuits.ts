@@ -199,6 +199,8 @@ export interface GlobalWeightEdge {
   target: string
   targetSaeName: string
   targetFeature: number
+  sourceInterpretation?: string | null
+  targetInterpretation?: string | null
   kind: 'global' | 'inhibitory'
   weight?: number
   score?: number
@@ -211,7 +213,11 @@ export interface GlobalWeightEdge {
 
 export interface GlobalWeightResult {
   mode: 'global' | 'inhibitory'
-  target: { saeName: string; featureIndex: number }
+  target: {
+    saeName: string
+    featureIndex: number
+    interpretation?: string | null
+  }
   numSamples: number
   numPositions: number | null
   upstream: GlobalWeightEdge[]
@@ -223,6 +229,36 @@ export interface GlobalWeightJob {
   result?: GlobalWeightResult
   error?: string
 }
+
+export const fetchGlobalWeightInterpretations = createServerFn({
+  method: 'POST',
+})
+  .inputValidator(
+    (data: { features: { saeName: string; featureIndex: number }[] }) => data,
+  )
+  .handler(async ({ data }) => {
+    const response = await fetch(
+      `${process.env.BACKEND_URL}/circuits/global-weights/interpretations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          features: data.features.map((feature) => ({
+            sae_name: feature.saeName,
+            feature_index: feature.featureIndex,
+          })),
+        }),
+      },
+    )
+    if (!response.ok) throw new Error(await response.text())
+    return camelcaseKeys(await response.json(), { deep: true }) as {
+      interpretations: {
+        saeName: string
+        featureIndex: number
+        text: string | null
+      }[]
+    }
+  })
 
 export const startGlobalWeightJob = createServerFn({ method: 'POST' })
   .inputValidator(

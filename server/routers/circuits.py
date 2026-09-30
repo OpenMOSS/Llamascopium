@@ -63,6 +63,38 @@ class GlobalWeightRequest(InhibitoryRequest):
     mode: Literal["global", "inhibitory"] = "global"
 
 
+class FeatureReference(BaseModel):
+    sae_name: str
+    feature_index: int = Field(ge=0)
+
+
+class FeatureInterpretationsRequest(BaseModel):
+    features: list[FeatureReference] = Field(max_length=500)
+
+
+@router.post("/global-weights/interpretations")
+def get_global_weight_interpretations(request: FeatureInterpretationsRequest):
+    indices_by_sae: dict[str, set[int]] = {}
+    for feature in request.features:
+        indices_by_sae.setdefault(feature.sae_name, set()).add(feature.feature_index)
+    interpretations = []
+    for name, indices in indices_by_sae.items():
+        features = list_feature_data(
+            sae_name=name,
+            indices=sorted(indices),
+            with_samplings=False,
+            with_logits=False,
+        )
+        for (sae_name, feature_index), feature in features.items():
+            interpretation = feature.get("interpretation")
+            interpretations.append({
+                "sae_name": sae_name,
+                "feature_index": feature_index,
+                "text": interpretation.get("text") if interpretation else None,
+            })
+    return {"interpretations": interpretations}
+
+
 @distributed
 def _compute_inhibitory_job(
     sae_set_name: str,
@@ -147,9 +179,34 @@ def _compute_global_weight_job(
             upstream = [serialize(edge) for edge in result.topk(target, k=request.top_k)]
             downstream = [serialize(edge) for edge in result.downstream(target, k=request.top_k)]
             num_positions = None
+
+        indices_by_sae: dict[str, set[int]] = {request.sae_name: {request.feature_index}}
+        for edge in upstream + downstream:
+            indices_by_sae.setdefault(edge["source_sae_name"], set()).add(edge["source_feature"])
+            indices_by_sae.setdefault(edge["target_sae_name"], set()).add(edge["target_feature"])
+        interpretations: dict[tuple[str, int], str] = {}
+        for name, indices in indices_by_sae.items():
+            features = list_feature_data(
+                sae_name=name,
+                indices=sorted(indices),
+                series=sae_series,
+                with_samplings=False,
+                with_logits=False,
+            )
+            for key, feature in features.items():
+                interpretation = feature.get("interpretation")
+                if interpretation:
+                    interpretations[key] = interpretation.get("text", "")
+        for edge in upstream + downstream:
+            edge["source_interpretation"] = interpretations.get((edge["source_sae_name"], edge["source_feature"]))
+            edge["target_interpretation"] = interpretations.get((edge["target_sae_name"], edge["target_feature"]))
         return {
             "mode": request.mode,
-            "target": {"sae_name": request.sae_name, "feature_index": request.feature_index},
+            "target": {
+                "sae_name": request.sae_name,
+                "feature_index": request.feature_index,
+                "interpretation": interpretations.get((request.sae_name, request.feature_index)),
+            },
             "num_samples": result.num_samples,
             "num_positions": num_positions,
             "upstream": upstream,

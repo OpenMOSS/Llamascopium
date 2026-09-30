@@ -91,6 +91,14 @@ def test_global_weight_job_dispatches_both_modes_and_keeps_edge_semantics(monkey
     monkeypatch.setattr(circuits, "get_model", lambda name, device_mesh: Model())
     monkeypatch.setattr(circuits, "SparseAutoEncoder", SimpleNamespace)
     monkeypatch.setattr(circuits, "LowRankSparseAttention", SimpleNamespace)
+    monkeypatch.setattr(
+        circuits,
+        "list_feature_data",
+        lambda sae_name, indices, **kwargs: {
+            (sae_name, index): {"interpretation": {"text": f"meaning of {sae_name} #{index}"}}
+            for index in indices
+        },
+    )
 
     global_edge = GlobalConnection(
         source="blocks.0.hook_mlp_out",
@@ -127,6 +135,9 @@ def test_global_weight_job_dispatches_both_modes_and_keeps_edge_semantics(monkey
     assert global_result["upstream"][0]["weight"] == -0.5
     assert global_result["downstream"][0]["target_sae_name"] == "target-sae"
     assert global_result["upstream"][0]["kind"] == "global"
+    assert global_result["target"]["interpretation"] == "meaning of target-sae #3"
+    assert global_result["upstream"][0]["source_interpretation"] == "meaning of source-sae #2"
+    assert global_result["upstream"][0]["target_interpretation"] == "meaning of target-sae #3"
 
     inhibitory_request = global_request.model_copy(update={"mode": "inhibitory"})
     inhibitory_result = circuits._compute_global_weight_job.__wrapped__("set-a", inhibitory_request)
@@ -155,3 +166,27 @@ def test_global_weight_job_status_is_scoped_to_its_circuit(monkeypatch, circuits
     job_id = started["job_id"]
     assert circuits.get_global_weight_job("circuit-a", job_id) == {"status": "pending"}
     assert isinstance(circuits.get_global_weight_job("circuit-b", job_id), Response)
+
+
+def test_global_weight_interpretations_are_batched_by_sae(monkeypatch, circuits):
+    calls = []
+
+    def list_data(sae_name, indices, **kwargs):
+        calls.append((sae_name, indices))
+        return {
+            (sae_name, index): {"interpretation": {"text": f"feature {index}"}}
+            for index in indices
+        }
+
+    monkeypatch.setattr(circuits, "list_feature_data", list_data)
+    request = circuits.FeatureInterpretationsRequest(features=[
+        circuits.FeatureReference(sae_name="sae-a", feature_index=2),
+        circuits.FeatureReference(sae_name="sae-a", feature_index=1),
+        circuits.FeatureReference(sae_name="sae-a", feature_index=2),
+    ])
+    result = circuits.get_global_weight_interpretations(request)
+    assert calls == [("sae-a", [1, 2])]
+    assert result["interpretations"] == [
+        {"sae_name": "sae-a", "feature_index": 1, "text": "feature 1"},
+        {"sae_name": "sae-a", "feature_index": 2, "text": "feature 2"},
+    ]
