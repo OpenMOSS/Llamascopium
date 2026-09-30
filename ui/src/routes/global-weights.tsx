@@ -38,6 +38,7 @@ const resultSchema = z.object({
   numPositions: z.number().int().positive(),
   upstream: z.array(edgeSchema),
   downstream: z.array(edgeSchema).length(0),
+  connections: z.array(edgeSchema).optional(),
 })
 
 export const Route = createFileRoute('/global-weights')({

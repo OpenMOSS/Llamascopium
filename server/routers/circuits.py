@@ -27,7 +27,7 @@ from llamascopium import (
     TransformerLensLanguageModel,
     prune_attribution,
 )
-from llamascopium.circuits.global_weights import compute_global_weights, compute_inhibitory_global_weights
+from llamascopium.circuits.global_weights import compute_global_weights, compute_inhibitory_global_weights, search_inhibitory_atlas
 from llamascopium.models.lorsa import LowRankSparseAttention
 from llamascopium.models.sae import SparseAutoEncoder
 from llamascopium.utils.distributed import is_primary_rank
@@ -61,6 +61,8 @@ class InhibitoryRequest(BaseModel):
 
 class GlobalWeightRequest(InhibitoryRequest):
     mode: Literal["global", "inhibitory"] = "global"
+    depth: int = Field(default=2, ge=1, le=3)
+    expansion_width: int = Field(default=3, ge=1, le=5)
 
 
 @distributed
@@ -126,11 +128,24 @@ def _compute_global_weight_job(
         target = (selected.cfg.hook_point_out, request.feature_index)
         names_by_hook = {sae.cfg.hook_point_out: name for name, sae in zip(sae_set.sae_names, saes)}
         if request.mode == "inhibitory":
-            result = compute_inhibitory_global_weights(model, saes, request.prompts, [target])
-            upstream = [
-                {**asdict(edge), "source_sae_name": names_by_hook[edge.source], "target_sae_name": request.sae_name}
-                for edge in result.topk(target, k=request.top_k, normalized=request.normalized)
-            ]
+            atlas, result = search_inhibitory_atlas(
+                target,
+                lambda targets: compute_inhibitory_global_weights(model, saes, request.prompts, targets),
+                depth=request.depth,
+                top_k=request.top_k,
+                expansion_width=request.expansion_width,
+                normalized=request.normalized,
+            )
+
+            def serialize_inhibitory(edge):
+                return {
+                    **asdict(edge),
+                    "source_sae_name": names_by_hook[edge.source],
+                    "target_sae_name": names_by_hook[edge.target],
+                }
+
+            connections = [serialize_inhibitory(edge) for edge in atlas.links.values()]
+            upstream = [edge for edge in connections if edge["target"] == target[0] and edge["target_feature"] == target[1]]
             downstream = []
             num_positions = result.n_total
         else:
@@ -146,10 +161,11 @@ def _compute_global_weight_job(
 
             upstream = [serialize(edge) for edge in result.topk(target, k=request.top_k)]
             downstream = [serialize(edge) for edge in result.downstream(target, k=request.top_k)]
+            connections = upstream + downstream
             num_positions = None
 
         indices_by_sae: dict[str, set[int]] = {request.sae_name: {request.feature_index}}
-        for edge in upstream + downstream:
+        for edge in connections:
             indices_by_sae.setdefault(edge["source_sae_name"], set()).add(edge["source_feature"])
             indices_by_sae.setdefault(edge["target_sae_name"], set()).add(edge["target_feature"])
         interpretations: dict[tuple[str, int], str] = {}
@@ -165,7 +181,7 @@ def _compute_global_weight_job(
                 interpretation = feature.get("interpretation")
                 if interpretation:
                     interpretations[key] = interpretation.get("text", "")
-        for edge in upstream + downstream:
+        for edge in connections:
             edge["source_interpretation"] = interpretations.get((edge["source_sae_name"], edge["source_feature"]))
             edge["target_interpretation"] = interpretations.get((edge["target_sae_name"], edge["target_feature"]))
         return {
@@ -179,6 +195,7 @@ def _compute_global_weight_job(
             "num_positions": num_positions,
             "upstream": upstream,
             "downstream": downstream,
+            "connections": connections,
         }
 
 

@@ -10,6 +10,7 @@ from llamascopium.circuits.global_weights import (
     InhibitoryWeights,
     compute_inhibitory_global_weights,
     compute_inhibitory_weights,
+    search_inhibitory_atlas,
 )
 from llamascopium.models.lorsa import LorsaConfig, LowRankSparseAttention
 from llamascopium.models.sae import SAEConfig, SparseAutoEncoder
@@ -70,6 +71,37 @@ def test_sparse_complement_conditional_means_and_structural_sign():
     assert result.topk(("target", 0))[0].kind == "inhibitory"
 
 
+def test_on_mean_is_weighted_by_source_activation():
+    source = _spec("source", (0, 1), [[1], [0]], [[-2, 0]])
+    target = _spec("target", (1, 0), [[1], [0]], [[1, 0]])
+    result = InhibitoryWeights([source, target], [("target", 0)])
+    result.update(
+        {"source": torch.tensor([[0.0], [1.0], [3.0]]).to_sparse()},
+        {("target", 0): torch.tensor([10.0, 2.0, 0.0])},
+        {"target.scale": torch.ones(3)},
+    )
+    stats = result.statistics(("target", 0), "source")
+    assert stats.mu_on[0] == pytest.approx((1 * 2 + 3 * 0) / (1 + 3))
+    assert stats.mu_off[0] == pytest.approx(10.0)
+    assert stats.delta[0] == pytest.approx(9.5)
+    assert stats.inhibitory_score[0] == pytest.approx(19.0)
+
+
+def test_search_keeps_positive_lorsa_candidate_beyond_global_top_k():
+    transcoder = _spec("transcoder", (0, 1), [[1], [0]], [[-2, 0]])
+    lorsa = _spec("lorsa", (1, 0), [[1], [0]], [[-1, 0]], lorsa=True)
+    target = _spec("target", (2, 0), [[1], [0]], [[1, 0]])
+    result = InhibitoryWeights([transcoder, lorsa, target], [("target", 0)])
+    result.update(
+        {"transcoder": torch.tensor([[0.0], [1.0]]).to_sparse(),
+         "lorsa": torch.tensor([[0.0], [1.0]]).to_sparse()},
+        {("target", 0): torch.tensor([10.0, 0.0])},
+        {"target.scale": torch.ones(2)},
+    )
+    assert [edge.source for edge in result.topk(("target", 0), k=1)] == ["transcoder"]
+    assert {edge.source for edge in result.topk(("target", 0), k=1, lorsa_k=1)} == {"transcoder", "lorsa"}
+
+
 def test_lorsa_and_transcoder_routing_use_pre_topk_values():
     source = _spec("source", (0, 0), [[1], [0]], [[-1, 0]])
     lorsa = _spec("lorsa", (1, 0), [[1], [0]], [[1, 0]], lorsa=True)
@@ -83,15 +115,16 @@ def test_lorsa_and_transcoder_routing_use_pre_topk_values():
             "lorsa": torch.zeros(2, 1).to_sparse(),
         },
         {("lorsa", 0): pre, ("transcoder", 0): pre},
-        {"lorsa.scale": torch.tensor([1.0, 2.0]), "transcoder.scale": torch.ones(2)},
+        {"lorsa.scale": torch.tensor([2.0, 3.0]), "transcoder.scale": torch.tensor([2.0, 3.0])},
         {"lorsa": pattern},
     )
     explicit = torch.tensor([sum(pre[q] * pattern[0, q, k] for q in range(2)) for k in range(2)])
+    routed = explicit / torch.tensor([2.0, 3.0])
     assert explicit.tolist() == pytest.approx([-0.5, 1.5])
-    assert result.s_total[("lorsa", 0)] == pytest.approx((explicit / torch.tensor([1.0, 2.0])).sum().item())
-    assert result.s_on[("lorsa", 0)]["source"][0] == pytest.approx(-0.5)
-    assert result.s_total[("transcoder", 0)] == pytest.approx(pre.sum().item())
-    assert result.s_on[("transcoder", 0)]["source"][0] == pytest.approx(pre[0].item())
+    assert result.s_total[("lorsa", 0)] == pytest.approx(routed.sum().item())
+    assert result.s_on[("lorsa", 0)]["source"][0] == pytest.approx(routed[0].item())
+    assert result.s_total[("transcoder", 0)] == pytest.approx((pre / torch.tensor([2.0, 3.0])).sum().item())
+    assert result.s_on[("transcoder", 0)]["source"][0] == pytest.approx((pre[0] / 2).item())
 
 
 def test_inhibitory_statistics_pool_positions_across_prompts():
@@ -138,6 +171,30 @@ def test_inhibitory_atlas_uses_positive_priority_and_causal_edge_direction():
     assert exported["source"] == ("source", 2)
     assert exported["target"] == ("target", 1)
     assert exported["kind"] == "inhibitory"
+
+
+def test_search_expands_selected_upstream_feature():
+    seed = ("blocks.2.hook_attn_out", 0)
+    middle = ("blocks.1.hook_mlp_out", 1)
+    lorsa = ("blocks.1.hook_attn_out", 2)
+
+    def edge(source, target, score):
+        return InhibitoryConnection(source[0], source[1], target[0], target[1], score, score, 1.0, -score, 0.0, 1.0)
+
+    calls = []
+
+    def compute(targets):
+        calls.append(targets)
+        edges = {seed: [edge(middle, seed, 2.0)], middle: [edge(lorsa, middle, 1.0)]}
+        return type("Result", (), {
+            "topk": lambda self, target, k, normalized, lorsa_k: edges[target][:k],
+            "num_samples": 1,
+        })()
+
+    atlas, result = search_inhibitory_atlas(seed, compute, depth=2, top_k=10, expansion_width=1)
+    assert result.num_samples == 1
+    assert calls == [[seed], [middle]]
+    assert (lorsa, middle) in atlas.links
 
 
 def test_real_model_captures_selected_pre_topk_target_and_sparse_source():

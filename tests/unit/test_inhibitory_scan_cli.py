@@ -23,6 +23,7 @@ def test_dataset_scan_exports_ranked_single_target_result(monkeypatch, tmp_path)
     class FakeSAE:
         def __init__(self, name):
             hooks = {
+                "lorsa": "blocks.0.hook_attn_out",
                 "source": "blocks.0.hook_mlp_out",
                 "target": "blocks.1.hook_mlp_out",
                 "later-matryoshka": "blocks.2.hook_resid_post",
@@ -37,7 +38,7 @@ def test_dataset_scan_exports_ranked_single_target_result(monkeypatch, tmp_path)
             pass
 
         def get_sae_set(self, name):
-            return SimpleNamespace(sae_series="series", sae_names=["source", "target", "later-matryoshka"])
+            return SimpleNamespace(sae_series="series", sae_names=["lorsa", "source", "target", "later-matryoshka"])
 
         def get_sae(self, name, series):
             return SimpleNamespace(cfg=FakeSAE(name).cfg)
@@ -67,14 +68,22 @@ def test_dataset_scan_exports_ranked_single_target_result(monkeypatch, tmp_path)
         lambda *args, **kwargs: iter([{"text": "hello"}, {"tokens": [4, 5, 6, 7]}, {"text": "later"}]),
     )
 
+    calls = []
+
     def compute(model, saes, inputs, targets):
-        assert len(saes) == 2
+        assert len(saes) == 3
         samples = list(inputs)
         assert [sample.tolist() for sample in samples] == [[[1, 2, 3]], [[4, 5, 6]]]
-        assert targets == [("blocks.1.hook_mlp_out", 3)]
-        edge = InhibitoryConnection(
-            "blocks.0.hook_mlp_out", 2, "blocks.1.hook_mlp_out", 3, 2.0, 1.0, 1.0, -2.0, 0.0, 1.0
-        )
+        calls.append(targets)
+        if targets == [("blocks.1.hook_mlp_out", 3)]:
+            edge = InhibitoryConnection(
+                "blocks.0.hook_mlp_out", 2, "blocks.1.hook_mlp_out", 3, 2.0, 1.0, 1.0, -2.0, 0.0, 1.0
+            )
+        else:
+            assert targets == [("blocks.0.hook_mlp_out", 2)]
+            edge = InhibitoryConnection(
+                "blocks.0.hook_attn_out", 1, "blocks.0.hook_mlp_out", 2, 1.0, 0.5, 1.0, -1.0, 0.0, 1.0
+            )
         return SimpleNamespace(num_samples=2, n_total=6, topk=lambda *args, **kwargs: [edge])
 
     monkeypatch.setattr(run, "compute_inhibitory_global_weights", compute)
@@ -87,6 +96,8 @@ def test_dataset_scan_exports_ranked_single_target_result(monkeypatch, tmp_path)
         output=output,
         max_samples=2,
         top_k=10,
+        depth=2,
+        expansion_width=3,
         shard_idx=0,
         n_shards=1,
         normalized=False,
@@ -105,3 +116,6 @@ def test_dataset_scan_exports_ranked_single_target_result(monkeypatch, tmp_path)
     assert saved["upstream"][0]["sourceSaeName"] == "source"
     assert saved["upstream"][0]["score"] == 2.0
     assert saved["downstream"] == []
+    assert calls == [[("blocks.1.hook_mlp_out", 3)], [("blocks.0.hook_mlp_out", 2)]]
+    assert saved["connections"][1]["sourceSaeName"] == "lorsa"
+    assert saved["connections"][1]["targetSaeName"] == "source"

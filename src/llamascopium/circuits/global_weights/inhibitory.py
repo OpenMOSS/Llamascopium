@@ -48,8 +48,16 @@ def _positive_sparse_mask(activations: torch.Tensor) -> torch.Tensor:
     return torch.sparse_coo_tensor(indices, values, sparse.shape, device=activations.device).coalesce()
 
 
+def _positive_sparse_activations(activations: torch.Tensor) -> torch.Tensor:
+    sparse = activations.coalesce() if activations.layout == torch.sparse_coo else activations.to_sparse().coalesce()
+    positive = sparse.values() > 0
+    return torch.sparse_coo_tensor(
+        sparse.indices()[:, positive], sparse.values()[positive].float(), sparse.shape, device=activations.device
+    ).coalesce()
+
+
 class InhibitoryWeights:
-    """Stream conditional pre-TopK means for upstream feature pairs.
+    """Stream source-weighted on and inactive off means for upstream pairs.
 
     The contrast is observational. A positive score is evidence of co-occurring
     suppression under a negative virtual weight, not a causal effect.
@@ -64,6 +72,7 @@ class InhibitoryWeights:
         self.targets = list(dict.fromkeys(targets))
         self.virtual_weights: dict[Feature, dict[str, torch.Tensor]] = {}
         self.s_on: dict[Feature, dict[str, torch.Tensor]] = {}
+        self.weighted_on: dict[Feature, dict[str, torch.Tensor]] = {}
         for target in self.targets:
             name, index = target
             if name not in self.specs or not 0 <= index < self.specs[name].encoder.shape[1]:
@@ -72,6 +81,7 @@ class InhibitoryWeights:
             encoder = target_spec.encoder[:, index].float()
             self.virtual_weights[target] = {}
             self.s_on[target] = {}
+            self.weighted_on[target] = {}
             for source in specs:
                 if source.order >= target_spec.order:
                     continue
@@ -82,12 +92,14 @@ class InhibitoryWeights:
                 self.s_on[target][source.name] = torch.zeros(
                     source.decoder.shape[0], device=decoder.device, dtype=torch.float32
                 )
+                self.weighted_on[target][source.name] = torch.zeros_like(self.s_on[target][source.name])
         source_names = {name for sums in self.s_on.values() for name in sums}
         self.n_on = {
             name: torch.zeros(spec.decoder.shape[0], device=spec.decoder.device, dtype=torch.int64)
             for name, spec in self.specs.items()
             if name in source_names
         }
+        self.activation_sum = {name: torch.zeros_like(count, dtype=torch.float32) for name, count in self.n_on.items()}
         self.s_total = {target: torch.zeros((), device=self.specs[target[0]].encoder.device) for target in self.targets}
         self.abs_pre_total = {target: torch.zeros_like(total) for target, total in self.s_total.items()}
         self.n_total = 0
@@ -132,13 +144,17 @@ class InhibitoryWeights:
             acts = source_activations[name]
             if acts.shape != (positions, count.numel()):
                 raise ValueError(f"Invalid source activation shape for {name}: {tuple(acts.shape)}")
-            mask = _positive_sparse_mask(acts)
+            positive_acts = _positive_sparse_activations(acts)
+            mask = _positive_sparse_mask(positive_acts)
             count += torch.bincount(mask.indices()[1], minlength=count.numel())
+            self.activation_sum[name] += torch.sparse.sum(positive_acts, dim=0).to_dense()
             # [feature, position] sparse @ [position, target] dense -> [feature, target].
             sums = torch.sparse.mm(mask.transpose(0, 1), routed_matrix)
+            weighted_sums = torch.sparse.mm(positive_acts.transpose(0, 1), routed_matrix)
             for column, target in enumerate(self.targets):
                 if name in self.s_on[target]:
                     self.s_on[target][name] += sums[:, column]
+                    self.weighted_on[target][name] += weighted_sums[:, column]
         self.n_total += positions
         self.num_samples += 1
 
@@ -149,8 +165,13 @@ class InhibitoryWeights:
         s_on = self.s_on[target][source]
         n_on = self.n_on[source]
         n_off = self.n_total - n_on
-        valid = (n_on > 0) & (n_off > 0)
-        mu_on = torch.where(valid, s_on / n_on.clamp_min(1), 0)
+        activation_sum = self.activation_sum[source]
+        valid = (activation_sum > 0) & (n_off > 0)
+        mu_on = torch.where(
+            valid,
+            self.weighted_on[target][source] / activation_sum.clamp_min(torch.finfo(activation_sum.dtype).tiny),
+            0,
+        )
         mu_off = torch.where(valid, (self.s_total[target] - s_on) / n_off.clamp_min(1), 0)
         delta = mu_off - mu_on
         virtual_weight = self.virtual_weights[target][source]
@@ -159,11 +180,11 @@ class InhibitoryWeights:
         return InhibitoryStatistics(virtual_weight, mu_on, mu_off, delta, score, score / denominator)
 
     def topk(
-        self, target: Feature, k: int = 10, normalized: bool = False, eps: float = 1e-8
+        self, target: Feature, k: int = 10, normalized: bool = False, eps: float = 1e-8, lorsa_k: int = 0
     ) -> list[InhibitoryConnection]:
         """Rank upstream neighbors by non-negative observational inhibitory score."""
-        if k < 0 or eps <= 0:
-            raise ValueError("k must be nonnegative and eps must be positive")
+        if k < 0 or lorsa_k < 0 or eps <= 0:
+            raise ValueError("k and lorsa_k must be nonnegative and eps must be positive")
         if k == 0 or self.n_total == 0:
             return []
         edges = []
@@ -188,7 +209,20 @@ class InhibitoryWeights:
                     )
                 )
         key = (lambda edge: edge.normalized_inhibitory_score) if normalized else (lambda edge: edge.score)
-        return sorted(edges, key=key, reverse=True)[:k]
+        ranked = sorted(edges, key=key, reverse=True)
+        selected = ranked[:k]
+        if lorsa_k:
+            seen = {(edge.source, edge.source_feature) for edge in selected}
+            remaining = max(0, lorsa_k - sum(self.specs[item.source].is_lorsa for item in selected))
+            for edge in ranked:
+                if remaining == 0:
+                    break
+                if not self.specs[edge.source].is_lorsa or (edge.source, edge.source_feature) in seen:
+                    continue
+                selected.append(edge)
+                seen.add((edge.source, edge.source_feature))
+                remaining -= 1
+        return sorted(selected, key=key, reverse=True)
 
 
 @torch.no_grad()
@@ -237,7 +271,7 @@ def compute_inhibitory_global_weights(
             def hook(value: torch.Tensor, hook):
                 if value.shape[0] != 1:
                     raise ValueError("Inhibitory weights require one prompt per forward pass")
-                source_activations[name] = _positive_sparse_mask(value.detach().squeeze(0))
+                source_activations[name] = _positive_sparse_activations(value.detach().squeeze(0))
                 return value
 
             return hook

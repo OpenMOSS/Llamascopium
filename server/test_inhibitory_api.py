@@ -130,7 +130,7 @@ def test_global_weight_job_dispatches_both_modes_and_keeps_edge_semantics(monkey
         lambda *args: SimpleNamespace(num_samples=1, n_total=3, topk=lambda *args, **kwargs: [inhibitory_edge]),
     )
 
-    global_request = circuits.GlobalWeightRequest(sae_name="target-sae", feature_index=3, prompts=["hello"])
+    global_request = circuits.GlobalWeightRequest(sae_name="target-sae", feature_index=3, prompts=["hello"], depth=1)
     global_result = circuits._compute_global_weight_job.__wrapped__("set-a", global_request)
     assert global_result["upstream"][0]["weight"] == -0.5
     assert global_result["downstream"][0]["target_sae_name"] == "target-sae"

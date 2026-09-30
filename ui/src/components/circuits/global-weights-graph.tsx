@@ -9,6 +9,16 @@ type Geometry = {
   center: Point
   nodes: Record<string, Point>
 }
+type GraphNode = {
+  key: string
+  hook: string
+  saeName: string
+  featureIndex: number
+  interpretation?: string | null
+  depth: number
+}
+
+const featureKey = (hook: string, feature: number) => `${hook}:${feature}`
 
 function shortName(hook: string, feature: number) {
   const layer = hook.match(/^blocks\.(\d+)\./)?.[1] ?? '?'
@@ -31,11 +41,16 @@ function edgeColor(edge: GlobalWeightEdge) {
       : '#60a5fa'
 }
 
-function lanes(edges: GlobalWeightEdge[], left: boolean) {
-  const groups: { edge: GlobalWeightEdge; index: number }[][] = [[], [], []]
-  edges.forEach((edge, index) => {
-    const lane = left ? 2 - (index % 3) : index % 3
-    groups[lane].push({ edge, index })
+function lanes(nodes: GraphNode[], left: boolean) {
+  const groups: GraphNode[][] = [[], [], []]
+  const multiHop = nodes.some((node) => node.depth > 1)
+  nodes.forEach((node, index) => {
+    const lane = left
+      ? multiHop
+        ? Math.max(0, 3 - node.depth)
+        : 2 - (index % 3)
+      : index % 3
+    groups[lane].push(node)
   })
   return groups
 }
@@ -55,9 +70,61 @@ export function GlobalWeightsGraph({
   const [geometry, setGeometry] = useState<Geometry | null>(null)
   const upstream = result.upstream
   const downstream = result.downstream
+  const upstreamEdges =
+    result.mode === 'inhibitory' ? (result.connections ?? upstream) : upstream
+  const centerHook = upstream[0]?.target ?? downstream[0]?.source ?? ''
+  const centerKey = featureKey(centerHook, result.target.featureIndex)
+  const depths = new Map([[centerKey, 0]])
+  for (let level = 1; level <= 3; level++) {
+    for (const edge of upstreamEdges) {
+      if (
+        depths.get(featureKey(edge.target, edge.targetFeature)) ===
+        level - 1
+      ) {
+        const sourceKey = featureKey(edge.source, edge.sourceFeature)
+        if (!depths.has(sourceKey)) depths.set(sourceKey, level)
+      }
+    }
+  }
+  const upstreamNodes = Array.from(
+    new Map(
+      upstreamEdges.map((edge) => {
+        const key = featureKey(edge.source, edge.sourceFeature)
+        return [
+          key,
+          {
+            key,
+            hook: edge.source,
+            saeName: edge.sourceSaeName,
+            featureIndex: edge.sourceFeature,
+            interpretation: edge.sourceInterpretation,
+            depth: depths.get(key) ?? 1,
+          } satisfies GraphNode,
+        ] as const
+      }),
+    ).values(),
+  )
+  const downstreamNodes = Array.from(
+    new Map(
+      downstream.map((edge) => {
+        const key = featureKey(edge.target, edge.targetFeature)
+        return [
+          key,
+          {
+            key,
+            hook: edge.target,
+            saeName: edge.targetSaeName,
+            featureIndex: edge.targetFeature,
+            interpretation: edge.targetInterpretation,
+            depth: 1,
+          } satisfies GraphNode,
+        ] as const
+      }),
+    ).values(),
+  )
   const maxValue = Math.max(
     1e-8,
-    ...[...upstream, ...downstream].map((edge) =>
+    ...[...upstreamEdges, ...downstream].map((edge) =>
       Math.abs(edgeValue(edge, normalized)),
     ),
   )
@@ -96,14 +163,8 @@ export function GlobalWeightsGraph({
     return () => observer.disconnect()
   }, [result])
 
-  const renderNode = (edge: GlobalWeightEdge, index: number, left: boolean) => {
-    const key = `${left ? 'up' : 'down'}-${index}`
-    const saeName = left ? edge.sourceSaeName : edge.targetSaeName
-    const featureIndex = left ? edge.sourceFeature : edge.targetFeature
-    const hook = left ? edge.source : edge.target
-    const interpretation = left
-      ? edge.sourceInterpretation
-      : edge.targetInterpretation
+  const renderNode = (node: GraphNode, left: boolean) => {
+    const { key, saeName, featureIndex, hook, interpretation } = node
     const label = (
       <span className="min-w-0 flex-1 text-left">
         <span className="block font-mono text-[11px] font-semibold text-slate-100">
@@ -134,22 +195,18 @@ export function GlobalWeightsGraph({
     )
   }
 
-  const renderLane = (
-    items: { edge: GlobalWeightEdge; index: number }[],
-    left: boolean,
-    lane: number,
-  ) => (
+  const renderLane = (items: GraphNode[], left: boolean, lane: number) => (
     <div
       key={`${left ? 'up' : 'down'}-lane-${lane}`}
       className="relative z-10 flex min-w-0 flex-col justify-center gap-6 py-12"
       style={{ paddingTop: 48 + lane * 24, paddingBottom: 96 - lane * 24 }}
     >
-      {items.map(({ edge, index }) => renderNode(edge, index, left))}
+      {items.map((node) => renderNode(node, left))}
     </div>
   )
 
   const lines = [
-    ...upstream.map((edge, index) => ({
+    ...upstreamEdges.map((edge, index) => ({
       edge,
       key: `up-${index}`,
       left: true,
@@ -160,13 +217,12 @@ export function GlobalWeightsGraph({
       left: false,
     })),
   ]
-  const centerHook = upstream[0]?.target ?? downstream[0]?.source ?? ''
 
   return (
     <div className="border border-slate-800 bg-[#151820]">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-white/10 px-4 py-2 text-xs text-slate-300">
-        <span>Upstream {upstream.length}</span>
-        <span>Downstream {downstream.length}</span>
+        <span>Upstream {upstreamNodes.length}</span>
+        <span>Downstream {downstreamNodes.length}</span>
         {result.mode === 'global' ? (
           <>
             <span className="inline-flex items-center gap-1.5">
@@ -198,10 +254,21 @@ export function GlobalWeightsGraph({
               aria-hidden="true"
             >
               {lines.map(({ edge, key, left }) => {
-                const point = geometry.nodes[key]
+                const sourceKey = left
+                  ? featureKey(edge.source, edge.sourceFeature)
+                  : centerKey
+                const targetKey = left
+                  ? featureKey(edge.target, edge.targetFeature)
+                  : featureKey(edge.target, edge.targetFeature)
+                const point = geometry.nodes[left ? sourceKey : targetKey]
                 if (!point) return null
                 const source = left ? point : geometry.center
-                const target = left ? geometry.center : point
+                const target = left
+                  ? targetKey === centerKey
+                    ? geometry.center
+                    : geometry.nodes[targetKey]
+                  : point
+                if (!target) return null
                 const strength =
                   Math.abs(edgeValue(edge, normalized)) / maxValue
                 return (
@@ -217,7 +284,7 @@ export function GlobalWeightsGraph({
               })}
             </svg>
           )}
-          {lanes(upstream, true).map((items, lane) =>
+          {lanes(upstreamNodes, true).map((items, lane) =>
             renderLane(items, true, lane),
           )}
           <div className="relative z-10 flex min-w-0 flex-col items-center justify-center text-center">
@@ -240,7 +307,7 @@ export function GlobalWeightsGraph({
               {result.target.interpretation || missingInterpretationLabel}
             </span>
           </div>
-          {lanes(downstream, false).map((items, lane) =>
+          {lanes(downstreamNodes, false).map((items, lane) =>
             renderLane(items, false, lane),
           )}
         </div>

@@ -1,4 +1,4 @@
-from llamascopium.circuits.global_weights.atlas import InhibitoryAtlas
+from llamascopium.circuits.global_weights.atlas import InhibitoryAtlas, search_inhibitory_atlas
 from llamascopium.circuits.global_weights.inhibitory import (
     InhibitoryConnection,
     InhibitoryStatistics,
@@ -19,6 +19,7 @@ __all__ = [
     "GlobalWeights",
     "compute_global_weights",
     "InhibitoryAtlas",
+    "search_inhibitory_atlas",
     "InhibitoryConnection",
     "InhibitoryStatistics",
     "InhibitoryWeights",

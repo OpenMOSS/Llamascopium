@@ -222,6 +222,7 @@ export interface GlobalWeightResult {
   numPositions: number | null
   upstream: GlobalWeightEdge[]
   downstream: GlobalWeightEdge[]
+  connections?: GlobalWeightEdge[]
 }
 
 export interface GlobalWeightJob {
@@ -240,6 +241,8 @@ export const startGlobalWeightJob = createServerFn({ method: 'POST' })
       topK: number
       normalized: boolean
       mode: 'global' | 'inhibitory'
+      depth: number
+      expansionWidth: number
     }) => data,
   )
   .handler(async ({ data }) => {
@@ -255,6 +258,8 @@ export const startGlobalWeightJob = createServerFn({ method: 'POST' })
           top_k: data.topK,
           normalized: data.normalized,
           mode: data.mode,
+          depth: data.depth,
+          expansion_width: data.expansionWidth,
         }),
       },
     )

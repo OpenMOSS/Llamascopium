@@ -7,7 +7,7 @@ import torch
 import typer
 
 from llamascopium.backend.language_model import TransformerLensLanguageModel
-from llamascopium.circuits.global_weights import compute_inhibitory_global_weights
+from llamascopium.circuits.global_weights import compute_inhibitory_global_weights, search_inhibitory_atlas
 from llamascopium.database import MongoClient, MongoDBConfig
 from llamascopium.models.lorsa import LowRankSparseAttention
 from llamascopium.models.sae import SparseAutoEncoder
@@ -87,6 +87,8 @@ def scan_inhibitory_global_weights(
     output: Annotated[Path, typer.Option("--output", help="JSON result file for later visualization.")],
     max_samples: Annotated[int, typer.Option("--max-samples", min=0, help="Maximum valid rows; 0 scans the full shard.")] = 0,
     top_k: Annotated[int, typer.Option("--top-k", min=1)] = 50,
+    depth: Annotated[int, typer.Option("--depth", min=1, max=3, help="Number of upstream expansion levels.")] = 2,
+    expansion_width: Annotated[int, typer.Option("--expansion-width", min=1, max=5)] = 3,
     shard_idx: Annotated[int, typer.Option("--shard-idx", min=0)] = 0,
     n_shards: Annotated[int, typer.Option("--n-shards", min=1)] = 1,
     normalized: Annotated[bool, typer.Option("--normalized")] = False,
@@ -146,11 +148,9 @@ def scan_inhibitory_global_weights(
     if feature_id >= selected.cfg.d_sae:
         raise typer.BadParameter(f"Feature {feature_id} is outside {target_sae}")
     target = (selected.cfg.hook_point_out, feature_id)
-    rows = load_dataset_shard(dataset_cfg, shard_idx=shard_idx, n_shards=n_shards)
-
     def inputs():
         scanned = 0
-        for row in rows:
+        for row in load_dataset_shard(dataset_cfg, shard_idx=shard_idx, n_shards=n_shards):
             if max_samples and scanned >= max_samples:
                 break
             if isinstance(row.get("text"), str) and row["text"].strip():
@@ -169,11 +169,36 @@ def scan_inhibitory_global_weights(
                 typer.echo(f"Scanned {scanned} samples")
             yield sample
 
-    result = compute_inhibitory_global_weights(model, saes, inputs(), [target])
+    atlas, result = search_inhibitory_atlas(
+        target,
+        lambda targets: compute_inhibitory_global_weights(model, saes, inputs(), targets),
+        depth=depth,
+        top_k=top_k,
+        expansion_width=expansion_width,
+        normalized=normalized,
+    )
     if result.num_samples == 0:
         raise typer.BadParameter("Dataset contains no nonempty text or token rows")
     names_by_hook = {sae.cfg.hook_point_out: name for name, sae in zip(selected_names, saes)}
-    edges = result.topk(target, k=top_k, normalized=normalized)
+    edges = [edge for edge in atlas.links.values() if (edge.target, edge.target_feature) == target]
+
+    def serialize(edge):
+        return {
+            "source": edge.source,
+            "sourceSaeName": names_by_hook[edge.source],
+            "sourceFeature": edge.source_feature,
+            "target": edge.target,
+            "targetSaeName": names_by_hook[edge.target],
+            "targetFeature": edge.target_feature,
+            "kind": edge.kind,
+            "score": edge.score,
+            "normalizedInhibitoryScore": edge.normalized_inhibitory_score,
+            "delta": edge.delta,
+            "virtualWeight": edge.virtual_weight,
+            "muOn": edge.mu_on,
+            "muOff": edge.mu_off,
+        }
+
     payload = {
         "schemaVersion": 1,
         "mode": "inhibitory",
@@ -187,25 +212,10 @@ def scan_inhibitory_global_weights(
         "target": {"saeName": target_sae, "featureIndex": feature_id},
         "numSamples": result.num_samples,
         "numPositions": result.n_total,
-        "upstream": [
-            {
-                "source": edge.source,
-                "sourceSaeName": names_by_hook[edge.source],
-                "sourceFeature": edge.source_feature,
-                "target": edge.target,
-                "targetSaeName": target_sae,
-                "targetFeature": edge.target_feature,
-                "kind": edge.kind,
-                "score": edge.score,
-                "normalizedInhibitoryScore": edge.normalized_inhibitory_score,
-                "delta": edge.delta,
-                "virtualWeight": edge.virtual_weight,
-                "muOn": edge.mu_on,
-                "muOff": edge.mu_off,
-            }
-            for edge in edges
-        ],
+        "depth": depth,
+        "upstream": [serialize(edge) for edge in edges],
         "downstream": [],
+        "connections": [serialize(edge) for edge in atlas.links.values()],
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

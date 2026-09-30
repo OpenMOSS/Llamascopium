@@ -6,6 +6,7 @@ import type { GlobalWeightEdge, GlobalWeightResult } from '@/api/circuits'
 import { fetchGlobalWeightJob, startGlobalWeightJob } from '@/api/circuits'
 import { featureQueryOptions } from '@/hooks/useFeatures'
 import { GlobalWeightsGraph } from '@/components/circuits/global-weights-graph'
+import { InhibitoryAtlasGraph } from '@/components/circuits/inhibitory-atlas-graph'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -151,6 +152,10 @@ export function GlobalWeightsResults({
       { saeName: edge.sourceSaeName, featureIndex: edge.sourceFeature },
       { saeName: edge.targetSaeName, featureIndex: edge.targetFeature },
     ]),
+    ...(result.connections ?? []).flatMap((edge) => [
+      { saeName: edge.sourceSaeName, featureIndex: edge.sourceFeature },
+      { saeName: edge.targetSaeName, featureIndex: edge.targetFeature },
+    ]),
   ]
   const uniqueFeatures = Array.from(
     new Map(
@@ -214,6 +219,17 @@ export function GlobalWeightsResults({
           `${edge.targetSaeName}:${edge.targetFeature}`,
         ) ?? edge.targetInterpretation,
     })),
+    connections: result.connections?.map((edge) => ({
+      ...edge,
+      sourceInterpretation:
+        interpretationByFeature.get(
+          `${edge.sourceSaeName}:${edge.sourceFeature}`,
+        ) ?? edge.sourceInterpretation,
+      targetInterpretation:
+        interpretationByFeature.get(
+          `${edge.targetSaeName}:${edge.targetFeature}`,
+        ) ?? edge.targetInterpretation,
+    })),
   }
   const empty = result.upstream.length === 0 && result.downstream.length === 0
   return (
@@ -241,17 +257,24 @@ export function GlobalWeightsResults({
               Could not load feature interpretations.
             </p>
           )}
-          <GlobalWeightsGraph
-            result={withInterpretations}
-            normalized={normalized}
-            missingInterpretationLabel={
-              interpretationsPending
-                ? 'Loading interpretation...'
-                : interpretationError
-                  ? 'Interpretation could not be loaded'
-                  : undefined
-            }
-          />
+          {result.mode === 'inhibitory' ? (
+            <InhibitoryAtlasGraph
+              result={withInterpretations}
+              normalized={normalized}
+            />
+          ) : (
+            <GlobalWeightsGraph
+              result={withInterpretations}
+              normalized={normalized}
+              missingInterpretationLabel={
+                interpretationsPending
+                  ? 'Loading interpretation...'
+                  : interpretationError
+                    ? 'Interpretation could not be loaded'
+                    : undefined
+              }
+            />
+          )}
           <EdgeTable
             edges={result.upstream}
             direction="upstream"
@@ -278,6 +301,8 @@ export function GlobalWeightsDialog({
   const [mode, setMode] = useState<'global' | 'inhibitory'>('global')
   const [promptText, setPromptText] = useState(prompt)
   const [topK, setTopK] = useState(10)
+  const [depth, setDepth] = useState(2)
+  const [expansionWidth, setExpansionWidth] = useState(3)
   const [normalized, setNormalized] = useState(false)
   const [jobId, setJobId] = useState<string | null>(null)
   const prompts = promptText
@@ -311,7 +336,13 @@ export function GlobalWeightsDialog({
     !running &&
     Number.isInteger(topK) &&
     topK >= 1 &&
-    topK <= 50
+    topK <= 50 &&
+    Number.isInteger(depth) &&
+    depth >= 1 &&
+    depth <= 3 &&
+    Number.isInteger(expansionWidth) &&
+    expansionWidth >= 1 &&
+    expansionWidth <= 5
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -366,6 +397,36 @@ export function GlobalWeightsDialog({
               />
             </label>
             {mode === 'inhibitory' && (
+              <>
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-slate-700">
+                    Depth
+                  </span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={3}
+                    value={depth}
+                    onChange={(event) => setDepth(Number(event.target.value))}
+                  />
+                </label>
+                <label className="block space-y-2">
+                  <span className="text-sm font-medium text-slate-700">
+                    Nodes per expansion
+                  </span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={expansionWidth}
+                    onChange={(event) =>
+                      setExpansionWidth(Number(event.target.value))
+                    }
+                  />
+                </label>
+              </>
+            )}
+            {mode === 'inhibitory' && (
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <Checkbox
                   checked={normalized}
@@ -410,6 +471,8 @@ export function GlobalWeightsDialog({
                   topK,
                   normalized,
                   mode,
+                  depth,
+                  expansionWidth,
                 },
               })
             }}
